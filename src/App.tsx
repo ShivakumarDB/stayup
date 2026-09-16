@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ServerState, PinnedLink } from './types';
+import { ServerState } from './types';
 import { Header } from './components/Header';
 import { KingThrone } from './components/KingThrone';
 import { ChallengerQueue } from './components/ChallengerQueue';
@@ -14,12 +14,11 @@ import { BidModal } from './components/BidModal';
 import { RefuelModal } from './components/RefuelModal';
 import { BoostRateModal } from './components/BoostRateModal';
 import { sounds } from './utils/audio';
-import { Flame, Info, Zap, AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
-import { formatCurrency } from './utils/formatters';
+import { Flame, Zap } from 'lucide-react';
+import { burnEngine } from './services/burnEngine';
 
 export default function App() {
-  const [state, setState] = useState<ServerState | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState<ServerState>(() => burnEngine.getState());
   const [isMuted, setIsMuted] = useState(false);
   const [isBidModalOpen, setIsBidModalOpen] = useState(false);
   const [isRefuelModalOpen, setIsRefuelModalOpen] = useState(false);
@@ -28,107 +27,50 @@ export default function App() {
   const [isSimulatingRival, setIsSimulatingRival] = useState(false);
   const [dethroneNotification, setDethroneNotification] = useState<string | null>(null);
 
-  const prevKingIdRef = useRef<string | null>(null);
+  const prevKingIdRef = useRef<string | null>(burnEngine.getState().currentKing?.id || null);
   const lastPulseTimeRef = useRef<number>(0);
 
-  // Fetch initial state and connect to SSE stream
+  // Subscribe to live burn engine (handles server SSE when available, and local client tick on static deploys/Vercel)
   useEffect(() => {
-    let eventSource: EventSource | null = null;
+    const unsubscribe = burnEngine.subscribe((nextState) => {
+      setState(nextState);
 
-    const fetchState = async () => {
-      try {
-        const res = await fetch('/api/state');
-        if (res.ok) {
-          const data: ServerState = await res.json();
-          setState(data);
-          prevKingIdRef.current = data.currentKing?.id || null;
-        }
-      } catch (err) {
-        console.error('Error fetching state:', err);
-      } finally {
-        setLoading(false);
+      // Check for king transition / dethrone event
+      if (
+        prevKingIdRef.current &&
+        nextState.currentKing?.id &&
+        prevKingIdRef.current !== nextState.currentKing.id
+      ) {
+        sounds.playDethroned();
+        setDethroneNotification(
+          `👑 DETHRONED! ${nextState.currentKing.author} snatched #1 with $${nextState.currentKing.ratePerHour}/hr!`
+        );
+        setTimeout(() => setDethroneNotification(null), 5000);
       }
-    };
-
-    fetchState();
-
-    // Setup SSE connection
-    try {
-      eventSource = new EventSource('/api/stream');
-
-      eventSource.addEventListener('state_update', (e) => {
-        try {
-          const newState: ServerState = JSON.parse(e.data);
-          setState((prev) => {
-            // Check if king changed
-            if (prev?.currentKing?.id && newState.currentKing?.id && prev.currentKing.id !== newState.currentKing.id) {
-              sounds.playDethroned();
-              setDethroneNotification(`👑 DETHRONED! ${newState.currentKing.author} snatched #1 with $${newState.currentKing.ratePerHour}/hr!`);
-              setTimeout(() => setDethroneNotification(null), 5000);
-            } else if (!prev?.currentKing && newState.currentKing) {
-              sounds.playCrowned();
-            }
-            return newState;
-          });
-        } catch (err) {
-          console.error('Failed to parse SSE state_update:', err);
-        }
-      });
-
-      eventSource.addEventListener('tick', (e) => {
-        try {
-          const tickData = JSON.parse(e.data);
-          setState((prev) => {
-            if (!prev || !prev.currentKing) return prev;
-            return {
-              ...prev,
-              currentKing: {
-                ...prev.currentKing,
-                balance: tickData.balance,
-                totalBurned: tickData.totalBurned,
-                reignSeconds: tickData.reignSeconds,
-              },
-              stats: {
-                ...prev.stats,
-                totalBurnedAllTime: tickData.totalBurnedAllTime,
-              },
-            };
-          });
-        } catch (err) {
-          console.error('Failed to parse tick event:', err);
-        }
-      });
-
-      eventSource.onerror = () => {
-        // EventSource will auto-retry
-      };
-    } catch (err) {
-      console.error('SSE initialization error:', err);
-    }
+      prevKingIdRef.current = nextState.currentKing?.id || null;
+    });
 
     return () => {
-      if (eventSource) {
-        eventSource.close();
-      }
+      unsubscribe();
     };
   }, []);
 
   // Tension pulse sound when king is low on fuel (< 60s)
   useEffect(() => {
-    if (!state?.currentKing || state.currentKing.status !== 'active') return;
+    if (!state.currentKing || state.currentKing.status !== 'active') return;
 
     const burnPerSecond = state.currentKing.ratePerHour / 3600;
     const secondsLeft = burnPerSecond > 0 ? state.currentKing.balance / burnPerSecond : 0;
 
     if (secondsLeft > 0 && secondsLeft <= 60 && !isMuted) {
       const now = Date.now();
-      // Tick every second
+      // Tick once per second
       if (now - lastPulseTimeRef.current >= 950) {
         lastPulseTimeRef.current = now;
         sounds.playTensionPulse();
       }
     }
-  }, [state?.currentKing?.balance, state?.currentKing?.ratePerHour, isMuted]);
+  }, [state.currentKing?.balance, state.currentKing?.ratePerHour, isMuted]);
 
   const handleToggleMute = () => {
     const nextMuted = !isMuted;
@@ -136,25 +78,15 @@ export default function App() {
     sounds.setMuted(nextMuted);
   };
 
-  const handleLinkClick = async (id: string, url: string) => {
-    try {
-      fetch('/api/click', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
-    } catch {
-      // ignore
-    }
+  const handleLinkClick = (id: string) => {
+    burnEngine.trackClick(id);
   };
 
   const handleSimulateRival = async () => {
     setIsSimulatingRival(true);
     try {
-      const res = await fetch('/api/simulate-rival', { method: 'POST' });
-      if (res.ok) {
-        sounds.playDethroned();
-      }
+      await burnEngine.simulateRival();
+      sounds.playDethroned();
     } catch (err) {
       console.error('Failed to simulate rival:', err);
     } finally {
@@ -163,7 +95,7 @@ export default function App() {
   };
 
   const handleOpenRefuelForKing = () => {
-    if (!state?.currentKing) return;
+    if (!state.currentKing) return;
     setRefuelTarget({
       id: state.currentKing.id,
       title: state.currentKing.title,
@@ -174,7 +106,7 @@ export default function App() {
   };
 
   const handleOpenRefuelForQueue = (id: string) => {
-    const item = state?.queue.find((q) => q.id === id);
+    const item = state.queue.find((q) => q.id === id);
     if (!item) return;
     setRefuelTarget({
       id: item.id,
@@ -185,26 +117,9 @@ export default function App() {
     setIsRefuelModalOpen(true);
   };
 
-  const refreshState = async () => {
-    try {
-      const res = await fetch('/api/state');
-      if (res.ok) {
-        const data = await res.json();
-        setState(data);
-      }
-    } catch {
-      // ignore
-    }
+  const refreshState = () => {
+    setState(burnEngine.getState());
   };
-
-  if (loading || !state) {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center text-zinc-400 gap-3">
-        <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-        <span className="font-mono text-sm">Connecting to stayup.lol live ticker...</span>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col selection:bg-amber-500 selection:text-black">

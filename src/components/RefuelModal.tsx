@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Droplets, Clock, Zap } from 'lucide-react';
 import { formatCurrency, formatDurationHuman } from '../utils/formatters';
+import { burnEngine } from '../services/burnEngine';
 
 interface RefuelModalProps {
   isOpen: boolean;
@@ -39,15 +40,9 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
     setError(null);
 
     try {
-      const res = await fetch('/api/topup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: targetId, amount }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to refuel');
+      const res = await burnEngine.refuel(targetId, amount);
+      if (!res.success) {
+        throw new Error('Failed to refuel');
       }
 
       onRefuelSuccess();

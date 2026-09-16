@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Crown, Zap, Flame, Droplets, Clock, ArrowRight, ShieldCheck } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { ACCENT_THEMES, formatCurrency, formatDurationHuman } from '../utils/formatters';
+import { burnEngine } from '../services/burnEngine';
 
 interface BidModalProps {
   isOpen: boolean;
@@ -59,23 +60,18 @@ export const BidModal: React.FC<BidModalProps> = ({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/bid', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          url,
-          tagline,
-          author: author.startsWith('@') ? author : `@${author}`,
-          ratePerHour: effectiveRate,
-          depositAmount,
-          accentColor,
-        }),
+      const res = await burnEngine.bid({
+        title,
+        url,
+        tagline,
+        author: author.startsWith('@') ? author : `@${author}`,
+        ratePerHour: effectiveRate,
+        depositAmount,
+        accentColor,
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to place bid');
+      if (!res.success) {
+        throw new Error(res.message || 'Failed to place bid');
       }
 
       if (willImmediatelyDethrone) {

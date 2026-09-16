@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Shield, TrendingUp, AlertTriangle } from 'lucide-react';
 import { formatCurrency } from '../utils/formatters';
+import { burnEngine } from '../services/burnEngine';
 
 interface BoostRateModalProps {
   isOpen: boolean;
@@ -44,15 +45,9 @@ export const BoostRateModal: React.FC<BoostRateModalProps> = ({
     setError(null);
 
     try {
-      const res = await fetch('/api/boost-rate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: kingId, newRate }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to boost rate');
+      const res = await burnEngine.boostRate(kingId, newRate);
+      if (!res.success) {
+        throw new Error('Failed to boost rate');
       }
 
       onBoostSuccess();

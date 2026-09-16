@@ -273,6 +273,10 @@ setInterval(() => {
 }, 1000);
 
 // API Endpoints
+app.get('/api/health', (req: Request, res: Response) => {
+  res.json({ status: 'ok', serverTime: Date.now() });
+});
+
 app.get('/api/state', (req: Request, res: Response) => {
   res.json(getState());
 });
