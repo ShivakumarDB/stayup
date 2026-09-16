@@ -1,0 +1,6 @@
+{
+  "name": "stayup.lol",
+  "description": "Pay a rising hourly rate to keep your link pinned at #1. The second you run out of fuel or get outbid, you drop instantly.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
