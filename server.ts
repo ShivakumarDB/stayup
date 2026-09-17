@@ -388,7 +388,22 @@ setInterval(() => {
 
 // API Endpoints
 app.get('/api/health', (req: Request, res: Response) => {
-  res.json({ status: 'ok', serverTime: Date.now() });
+  const rawKey = process.env.STRIPE_SECRET_KEY || '';
+  const rawWebhook = process.env.STRIPE_WEBHOOK_SECRET || '';
+
+  res.json({
+    status: 'ok',
+    serverTime: Date.now(),
+    stripe: {
+      isKeyPresent: Boolean(rawKey),
+      keyPrefix: rawKey ? rawKey.slice(0, 7) : null,
+      keyLength: rawKey.length,
+      isWebhookSecretPresent: Boolean(rawWebhook),
+      webhookSecretPrefix: rawWebhook ? rawWebhook.slice(0, 6) : null,
+      isTestMode: rawKey.startsWith('sk_test_'),
+    },
+    nodeEnv: process.env.NODE_ENV || 'development',
+  });
 });
 
 app.get('/api/state', (req: Request, res: Response) => {
@@ -1280,7 +1295,11 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
+    const rawKey = process.env.STRIPE_SECRET_KEY || '';
+    const rawWebhook = process.env.STRIPE_WEBHOOK_SECRET || '';
     console.log(`stayup.lol server running on http://localhost:${PORT}`);
+    console.log(`[Stripe Debug] STRIPE_SECRET_KEY present: ${Boolean(rawKey)}, prefix: ${rawKey ? rawKey.slice(0, 7) : 'NONE'}, length: ${rawKey.length}`);
+    console.log(`[Stripe Debug] STRIPE_WEBHOOK_SECRET present: ${Boolean(rawWebhook)}, prefix: ${rawWebhook ? rawWebhook.slice(0, 6) : 'NONE'}`);
   });
 }
 
