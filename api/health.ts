@@ -24,7 +24,10 @@ export default function handler(req: any, res: any) {
       isSecretPresent: Boolean(rawKeySecret),
       isWebhookSecretPresent: Boolean(rawWebhook),
       isTestMode: rawKeyId.startsWith('rzp_test_'),
+      keyId: rawKeyId || null,
     },
+    razorpayEnabled: Boolean(rawKeyId && rawKeySecret),
+    razorpayKeyId: rawKeyId || null,
     vercel: {
       isVercel: Boolean(process.env.VERCEL),
       vercelEnv: process.env.VERCEL_ENV || null,

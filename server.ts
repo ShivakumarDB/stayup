@@ -416,7 +416,10 @@ const handleHealth = (req: Request, res: Response) => {
       isSecretPresent: Boolean(rawKeySecret),
       isWebhookSecretPresent: Boolean(rawWebhook),
       isTestMode: rawKeyId.startsWith('rzp_test_'),
+      keyId: rawKeyId || null,
     },
+    razorpayEnabled: Boolean(rawKeyId && rawKeySecret),
+    razorpayKeyId: rawKeyId || null,
     vercel: {
       isVercel: Boolean(process.env.VERCEL),
       vercelEnv: process.env.VERCEL_ENV || null,
@@ -824,25 +827,7 @@ const handleCreateOrder = async (req: Request, res: Response) => {
     }
 
     if (!razorpay) {
-      // Sandbox fallback
-      const result = executeBid({
-        title,
-        url,
-        tagline,
-        author,
-        ratePerHour: rate,
-        depositAmount: deposit,
-        accentColor,
-      });
-
-      res.json({
-        demoMode: true,
-        success: true,
-        message: 'Sandbox bid placed (no Razorpay keys configured).',
-        manageKey: result.manageKey,
-        id: result.id,
-        isKing: result.isKing,
-      });
+      res.status(400).json({ error: 'Razorpay keys are not configured on the server. Live payment is required to claim #1.' });
       return;
     }
 
@@ -896,13 +881,7 @@ const handleCreateOrder = async (req: Request, res: Response) => {
     }
 
     if (!razorpay) {
-      const result = executeTopup({ id: target, amount: numAmount, manageKey });
-      res.json({
-        demoMode: true,
-        success: result.success,
-        balance: result.balance,
-        isOwner: result.isOwner,
-      });
+      res.status(400).json({ error: 'Razorpay keys are not configured on the server. Live payment is required to refuel.' });
       return;
     }
 
@@ -959,18 +938,13 @@ const handleCreateOrder = async (req: Request, res: Response) => {
       return;
     }
 
-    if (!razorpay || deposit <= 0) {
-      const result = executeBoostRate({
-        id: target,
-        newRate: rate,
-        depositAmount: deposit,
-        manageKey,
-      });
-      res.json({
-        demoMode: !razorpay,
-        success: result.success,
-        king: result.king,
-      });
+    if (!razorpay) {
+      res.status(400).json({ error: 'Razorpay keys are not configured on the server. Live payment is required to boost rate.' });
+      return;
+    }
+
+    if (deposit <= 0) {
+      res.status(400).json({ error: 'A fuel deposit is required to boost your defense burn rate.' });
       return;
     }
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Droplets, Clock, Zap, ShieldCheck } from 'lucide-react';
 import { formatCurrency, formatDurationHuman } from '../utils/formatters';
 import { burnEngine } from '../services/burnEngine';
@@ -38,10 +38,36 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [livePaymentEnabled, setLivePaymentEnabled] = useState<boolean>(Boolean(razorpayEnabled || stripeEnabled));
+  const [liveKeyId, setLiveKeyId] = useState<string | null>(razorpayKeyId || null);
+  const [liveTestMode, setLiveTestMode] = useState<boolean>(razorpayTestMode ?? true);
+
+  // Sync state when props update
+  useEffect(() => {
+    if (razorpayEnabled !== undefined) {
+      setLivePaymentEnabled(Boolean(razorpayEnabled || stripeEnabled));
+      setLiveKeyId(razorpayKeyId || null);
+      if (razorpayTestMode !== undefined) setLiveTestMode(razorpayTestMode);
+    }
+  }, [razorpayEnabled, razorpayKeyId, razorpayTestMode, stripeEnabled]);
+
+  // Query /api/health at runtime when modal is opened to confirm payment gateway credentials
+  useEffect(() => {
+    if (isOpen) {
+      burnEngine.checkPaymentHealth().then((health) => {
+        if (health.razorpayEnabled) {
+          setLivePaymentEnabled(true);
+          setLiveKeyId(health.razorpayKeyId);
+          setLiveTestMode(health.razorpayTestMode);
+        }
+      });
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const isPaymentEnabled = Boolean(razorpayEnabled || stripeEnabled);
-  const isTestPaymentMode = razorpayTestMode !== undefined ? razorpayTestMode : stripeTestMode;
+  const isPaymentEnabled = livePaymentEnabled;
+  const isTestPaymentMode = liveTestMode;
 
   const burnPerSecond = ratePerHour / 3600;
   const addedSeconds = burnPerSecond > 0 ? amount / burnPerSecond : 0;
@@ -55,7 +81,22 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
     setError(null);
 
     try {
-      if (isPaymentEnabled) {
+      // Confirm payment availability directly with /api/health if not yet marked active
+      let paymentAvailable = livePaymentEnabled;
+      let effectiveKeyId = liveKeyId;
+
+      if (!paymentAvailable) {
+        const health = await burnEngine.checkPaymentHealth();
+        if (health.razorpayEnabled) {
+          paymentAvailable = true;
+          effectiveKeyId = health.razorpayKeyId;
+          setLivePaymentEnabled(true);
+          setLiveKeyId(effectiveKeyId);
+          setLiveTestMode(health.razorpayTestMode);
+        }
+      }
+
+      if (paymentAvailable) {
         // Route through Razorpay order creation
         const res = await fetch('/api/create-razorpay-order', {
           method: 'POST',
@@ -73,37 +114,34 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
           throw new Error(json.error || 'Failed to initialize refuel order');
         }
 
-        if (json.livePayment && json.orderId) {
-          await openRazorpayCheckout({
-            orderData: {
-              ...json,
-              keyId: json.keyId || razorpayKeyId || undefined,
-            },
-            title: 'Panic Refuel Fuel Injection',
-            description: `+$${amount.toFixed(2)} emergency fuel for "${targetTitle}"`,
-            onSuccess: () => {
-              onRefuelSuccess();
-              onClose();
-              setLoading(false);
-            },
-            onError: (errMsg) => {
-              setError(errMsg);
-              setLoading(false);
-            },
-            onClose: () => {
-              setLoading(false);
-            },
-          });
-          return;
+        if (!json.orderId) {
+          throw new Error(json.error || 'Server did not return a valid order ID. Payment is required.');
         }
 
-        // Demo fallback returned by order endpoint
-        onRefuelSuccess();
-        onClose();
+        await openRazorpayCheckout({
+          orderData: {
+            ...json,
+            keyId: json.keyId || effectiveKeyId || undefined,
+          },
+          title: 'Panic Refuel Fuel Injection',
+          description: `+$${amount.toFixed(2)} emergency fuel for "${targetTitle}"`,
+          onSuccess: () => {
+            onRefuelSuccess();
+            onClose();
+            setLoading(false);
+          },
+          onError: (errMsg) => {
+            setError(errMsg);
+            setLoading(false);
+          },
+          onClose: () => {
+            setLoading(false);
+          },
+        });
         return;
       }
 
-      // Sandbox execution
+      // Sandbox execution: ONLY when no payment credentials exist
       const res = await burnEngine.refuel(targetId, amount);
       if (!res.success) {
         throw new Error('Failed to refuel');

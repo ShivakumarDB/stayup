@@ -50,6 +50,16 @@ export default function App() {
       prevKingIdRef.current = nextState.currentKing?.id || null;
     });
 
+    // Explicit runtime query to /api/health to detect Razorpay keys
+    burnEngine.checkPaymentHealth().then((health) => {
+      setState((prev) => ({
+        ...prev,
+        razorpayEnabled: health.razorpayEnabled,
+        razorpayTestMode: health.razorpayTestMode,
+        razorpayKeyId: health.razorpayKeyId,
+      }));
+    });
+
     return () => {
       unsubscribe();
     };

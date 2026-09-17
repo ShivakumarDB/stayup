@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Crown, Zap, Flame, Droplets, Clock, ArrowRight, ShieldCheck } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { ACCENT_THEMES, formatCurrency, formatDurationHuman } from '../utils/formatters';
@@ -41,10 +41,36 @@ export const BidModal: React.FC<BidModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [livePaymentEnabled, setLivePaymentEnabled] = useState<boolean>(Boolean(razorpayEnabled || stripeEnabled));
+  const [liveKeyId, setLiveKeyId] = useState<string | null>(razorpayKeyId || null);
+  const [liveTestMode, setLiveTestMode] = useState<boolean>(razorpayTestMode ?? true);
+
+  // Sync state when props update
+  useEffect(() => {
+    if (razorpayEnabled !== undefined) {
+      setLivePaymentEnabled(Boolean(razorpayEnabled || stripeEnabled));
+      setLiveKeyId(razorpayKeyId || null);
+      if (razorpayTestMode !== undefined) setLiveTestMode(razorpayTestMode);
+    }
+  }, [razorpayEnabled, razorpayKeyId, razorpayTestMode, stripeEnabled]);
+
+  // Query /api/health at runtime when modal is opened to confirm payment gateway credentials
+  useEffect(() => {
+    if (isOpen) {
+      burnEngine.checkPaymentHealth().then((health) => {
+        if (health.razorpayEnabled) {
+          setLivePaymentEnabled(true);
+          setLiveKeyId(health.razorpayKeyId);
+          setLiveTestMode(health.razorpayTestMode);
+        }
+      });
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  const isPaymentEnabled = Boolean(razorpayEnabled || stripeEnabled);
-  const isTestPaymentMode = razorpayTestMode !== undefined ? razorpayTestMode : stripeTestMode;
+  const isPaymentEnabled = livePaymentEnabled;
+  const isTestPaymentMode = liveTestMode;
 
   // Sync minRate if user rate is below it
   const effectiveRate = Math.max(ratePerHour, minRate);
@@ -75,8 +101,23 @@ export const BidModal: React.FC<BidModalProps> = ({
     setLoading(true);
 
     try {
-      // If Razorpay/Payment integration is active on the server
-      if (isPaymentEnabled) {
+      // Confirm payment availability directly with /api/health if not yet marked active
+      let paymentAvailable = livePaymentEnabled;
+      let effectiveKeyId = liveKeyId;
+
+      if (!paymentAvailable) {
+        const health = await burnEngine.checkPaymentHealth();
+        if (health.razorpayEnabled) {
+          paymentAvailable = true;
+          effectiveKeyId = health.razorpayKeyId;
+          setLivePaymentEnabled(true);
+          setLiveKeyId(effectiveKeyId);
+          setLiveTestMode(health.razorpayTestMode);
+        }
+      }
+
+      // If Razorpay keys are configured on the server, live payment is mandatory
+      if (paymentAvailable) {
         const res = await fetch('/api/create-razorpay-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -97,60 +138,47 @@ export const BidModal: React.FC<BidModalProps> = ({
           throw new Error(json.error || 'Failed to initialize payment order');
         }
 
-        if (json.livePayment && json.orderId) {
-          await openRazorpayCheckout({
-            orderData: {
-              ...json,
-              keyId: json.keyId || razorpayKeyId || undefined,
-            },
-            title: 'Pin at #1 (Crown Bid)',
-            description: `Fuel deposit: ${formatCurrency(depositAmount)} • Rate: $${effectiveRate}/hr`,
-            author,
-            onSuccess: (verifyResult) => {
-              if (verifyResult.id && verifyResult.manageKey) {
-                saveOwnerKey(verifyResult.id, verifyResult.manageKey);
-              }
-
-              if (willImmediatelyDethrone) {
-                confetti({
-                  particleCount: 120,
-                  spread: 80,
-                  origin: { y: 0.6 },
-                });
-              }
-
-              onBidSuccess();
-              onClose();
-              setLoading(false);
-            },
-            onError: (errMsg) => {
-              setError(errMsg);
-              setLoading(false);
-            },
-            onClose: () => {
-              setLoading(false);
-            },
-          });
-          return;
+        if (!json.orderId) {
+          throw new Error(json.error || 'Server did not return an order ID. Payment required.');
         }
 
-        // Demo fallback returned by order endpoint
-        if (json.id && json.manageKey) {
-          saveOwnerKey(json.id, json.manageKey);
-        }
-        if (willImmediatelyDethrone) {
-          confetti({
-            particleCount: 100,
-            spread: 70,
-            origin: { y: 0.6 },
-          });
-        }
-        onBidSuccess();
-        onClose();
+        await openRazorpayCheckout({
+          orderData: {
+            ...json,
+            keyId: json.keyId || effectiveKeyId || undefined,
+          },
+          title: 'Pin at #1 (Crown Bid)',
+          description: `Fuel deposit: ${formatCurrency(depositAmount)} • Rate: $${effectiveRate}/hr`,
+          author,
+          onSuccess: (verifyResult) => {
+            if (verifyResult.id && verifyResult.manageKey) {
+              saveOwnerKey(verifyResult.id, verifyResult.manageKey);
+            }
+
+            if (willImmediatelyDethrone) {
+              confetti({
+                particleCount: 120,
+                spread: 80,
+                origin: { y: 0.6 },
+              });
+            }
+
+            onBidSuccess();
+            onClose();
+            setLoading(false);
+          },
+          onError: (errMsg) => {
+            setError(errMsg);
+            setLoading(false);
+          },
+          onClose: () => {
+            setLoading(false);
+          },
+        });
         return;
       }
 
-      // Sandbox Mode: Process simulated bid
+      // Sandbox Mode: ONLY reachable if the server does NOT have Razorpay keys configured
       const res = await burnEngine.bid({
         title,
         url,

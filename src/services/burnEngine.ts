@@ -253,8 +253,53 @@ class BurnEngine {
     }
   }
 
+  public async checkPaymentHealth(): Promise<{
+    razorpayEnabled: boolean;
+    razorpayTestMode: boolean;
+    razorpayKeyId: string | null;
+  }> {
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          const rzp = data.razorpay || {};
+          const isEnabled = Boolean(
+            data.razorpayEnabled || 
+            (rzp.isKeyPresent && rzp.isSecretPresent !== false)
+          );
+          const isTest = rzp.isTestMode !== undefined ? Boolean(rzp.isTestMode) : true;
+          const keyId = rzp.keyId || data.razorpayKeyId || null;
+
+          this.state.razorpayEnabled = isEnabled;
+          this.state.razorpayTestMode = isTest;
+          this.state.razorpayKeyId = keyId;
+          this.notify();
+
+          return {
+            razorpayEnabled: isEnabled,
+            razorpayTestMode: isTest,
+            razorpayKeyId: keyId,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('[burnEngine] /api/health check failed:', err);
+    }
+
+    return {
+      razorpayEnabled: Boolean(this.state.razorpayEnabled),
+      razorpayTestMode: Boolean(this.state.razorpayTestMode),
+      razorpayKeyId: this.state.razorpayKeyId || null,
+    };
+  }
+
   private async initConnection() {
-    // Attempt to verify if the server API is responding with JSON
+    // 1. Query server health endpoint to discover active payment gateway credentials
+    await this.checkPaymentHealth();
+
+    // 2. Attempt to verify if the server API is responding with JSON
     let serverReachable = false;
     try {
       const controller = new AbortController();
@@ -269,7 +314,13 @@ class BurnEngine {
         if (serverData && serverData.currentKing) {
           serverReachable = true;
           this.isUsingServer = true;
-          this.state = serverData;
+          // Preserve payment health info if serverData didn't populate it
+          this.state = {
+            ...serverData,
+            razorpayEnabled: this.state.razorpayEnabled ?? serverData.razorpayEnabled,
+            razorpayTestMode: this.state.razorpayTestMode ?? serverData.razorpayTestMode,
+            razorpayKeyId: this.state.razorpayKeyId ?? serverData.razorpayKeyId,
+          };
           this.notify();
           this.connectSSE();
         }
