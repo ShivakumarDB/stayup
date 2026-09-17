@@ -133,6 +133,9 @@ export const INITIAL_SEED_STATE: ServerState = {
   minRate: 145,
   serverTime: Date.now(),
   isDemoMode: true,
+  razorpayEnabled: false,
+  razorpayTestMode: true,
+  razorpayKeyId: null,
   stripeEnabled: false,
   stripeTestMode: true,
 };
@@ -798,6 +801,9 @@ class BurnEngine {
       minRate: 10,
       serverTime: Date.now(),
       isDemoMode: true,
+      razorpayEnabled: false,
+      razorpayTestMode: true,
+      razorpayKeyId: null,
       stripeEnabled: false,
       stripeTestMode: true,
     };

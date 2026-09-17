@@ -78,6 +78,9 @@ export interface ServerState {
   minRate: number; // minimum rate per hour required to challenge #1
   serverTime: number;
   isDemoMode: boolean; // Indicates if the app is currently in simulated sandbox mode
-  stripeEnabled: boolean; // True if STRIPE_SECRET_KEY is configured on the backend
-  stripeTestMode: boolean; // True if Stripe is using test mode keys (sk_test_...)
+  razorpayEnabled?: boolean; // True if RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET are configured
+  razorpayTestMode?: boolean; // True if Razorpay is using test key (rzp_test_...)
+  razorpayKeyId?: string | null; // Public Key ID passed to Razorpay Checkout frontend
+  stripeEnabled?: boolean; // Backward-compatibility
+  stripeTestMode?: boolean; // Backward-compatibility
 }

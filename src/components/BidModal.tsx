@@ -3,12 +3,17 @@ import { X, Crown, Zap, Flame, Droplets, Clock, ArrowRight, ShieldCheck } from '
 import confetti from 'canvas-confetti';
 import { ACCENT_THEMES, formatCurrency, formatDurationHuman } from '../utils/formatters';
 import { burnEngine } from '../services/burnEngine';
+import { openRazorpayCheckout } from '../utils/razorpay';
+import { saveOwnerKey } from '../utils/ownerKeys';
 
 interface BidModalProps {
   isOpen: boolean;
   onClose: () => void;
   minRate: number;
   currentKingRate?: number;
+  razorpayEnabled?: boolean;
+  razorpayTestMode?: boolean;
+  razorpayKeyId?: string | null;
   stripeEnabled?: boolean;
   stripeTestMode?: boolean;
   onBidSuccess: () => void;
@@ -19,6 +24,9 @@ export const BidModal: React.FC<BidModalProps> = ({
   onClose,
   minRate,
   currentKingRate,
+  razorpayEnabled,
+  razorpayTestMode,
+  razorpayKeyId,
   stripeEnabled,
   stripeTestMode,
   onBidSuccess,
@@ -34,6 +42,9 @@ export const BidModal: React.FC<BidModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const isPaymentEnabled = Boolean(razorpayEnabled || stripeEnabled);
+  const isTestPaymentMode = razorpayTestMode !== undefined ? razorpayTestMode : stripeTestMode;
 
   // Sync minRate if user rate is below it
   const effectiveRate = Math.max(ratePerHour, minRate);
@@ -64,12 +75,13 @@ export const BidModal: React.FC<BidModalProps> = ({
     setLoading(true);
 
     try {
-      // If Stripe Checkout is enabled on the server, redirect to Stripe
-      if (stripeEnabled) {
-        const res = await fetch('/api/create-checkout-session', {
+      // If Razorpay/Payment integration is active on the server
+      if (isPaymentEnabled) {
+        const res = await fetch('/api/create-razorpay-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            action: 'bid',
             title,
             url,
             tagline,
@@ -77,21 +89,68 @@ export const BidModal: React.FC<BidModalProps> = ({
             ratePerHour: effectiveRate,
             depositAmount,
             accentColor,
-            returnUrl: window.location.origin,
           }),
         });
 
         const json = await res.json();
-        if (!res.ok || !json.checkoutUrl) {
-          throw new Error(json.error || 'Failed to create Stripe checkout session');
+        if (!res.ok) {
+          throw new Error(json.error || 'Failed to initialize payment order');
         }
 
-        // Redirect user to real Stripe Checkout hosted payment page
-        window.location.href = json.checkoutUrl;
+        if (json.livePayment && json.orderId) {
+          await openRazorpayCheckout({
+            orderData: {
+              ...json,
+              keyId: json.keyId || razorpayKeyId || undefined,
+            },
+            title: 'Pin at #1 (Crown Bid)',
+            description: `Fuel deposit: ${formatCurrency(depositAmount)} • Rate: $${effectiveRate}/hr`,
+            author,
+            onSuccess: (verifyResult) => {
+              if (verifyResult.id && verifyResult.manageKey) {
+                saveOwnerKey(verifyResult.id, verifyResult.manageKey);
+              }
+
+              if (willImmediatelyDethrone) {
+                confetti({
+                  particleCount: 120,
+                  spread: 80,
+                  origin: { y: 0.6 },
+                });
+              }
+
+              onBidSuccess();
+              onClose();
+              setLoading(false);
+            },
+            onError: (errMsg) => {
+              setError(errMsg);
+              setLoading(false);
+            },
+            onClose: () => {
+              setLoading(false);
+            },
+          });
+          return;
+        }
+
+        // Demo fallback returned by order endpoint
+        if (json.id && json.manageKey) {
+          saveOwnerKey(json.id, json.manageKey);
+        }
+        if (willImmediatelyDethrone) {
+          confetti({
+            particleCount: 100,
+            spread: 70,
+            origin: { y: 0.6 },
+          });
+        }
+        onBidSuccess();
+        onClose();
         return;
       }
 
-      // Sandbox Mode: Process test bid
+      // Sandbox Mode: Process simulated bid
       const res = await burnEngine.bid({
         title,
         url,
@@ -123,7 +182,9 @@ export const BidModal: React.FC<BidModalProps> = ({
         setError('An unexpected error occurred.');
       }
     } finally {
-      setLoading(false);
+      if (!isPaymentEnabled) {
+        setLoading(false);
+      }
     }
   };
 
@@ -381,19 +442,19 @@ export const BidModal: React.FC<BidModalProps> = ({
           </div>
 
           {/* Payment & Simulation Mode Note */}
-          {stripeEnabled ? (
-            <div className="p-3 rounded-xl bg-violet-500/10 border border-violet-500/30 text-[11px] text-violet-300 flex items-center gap-2 font-mono">
-              <ShieldCheck className="w-4 h-4 text-violet-400 shrink-0" />
+          {isPaymentEnabled ? (
+            <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/30 text-[11px] text-blue-300 flex items-center gap-2 font-mono">
+              <ShieldCheck className="w-4 h-4 text-blue-400 shrink-0" />
               <span>
-                {stripeTestMode
-                  ? '⚡ Stripe Test Mode: Test with fake card 4242 4242 4242 4242 (any future date & CVC). Action is processed strictly after webhook confirmation.'
-                  : '🔒 Live Stripe Checkout Active: Payment is verified via webhook before your link claims the throne.'}
+                {isTestPaymentMode
+                  ? '⚡ Razorpay Test Mode: Cards, UPI, Netbanking simulation active. Crown is awarded upon server HMAC signature verification.'
+                  : '🔒 Live Razorpay Checkout Active: Payment is securely verified on the server before crowning.'}
               </span>
             </div>
           ) : (
             <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 flex items-center gap-2 font-mono">
               <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>🧪 Sandbox Mode: Placed instantly with test fuel. (Set STRIPE_SECRET_KEY in .env to activate live card billing).</span>
+              <span>🧪 Sandbox Mode: Placed instantly with test fuel. (Set RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET in environment to activate live checkout).</span>
             </div>
           )}
 
@@ -401,14 +462,14 @@ export const BidModal: React.FC<BidModalProps> = ({
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 font-extrabold text-sm tracking-wide shadow-lg shadow-amber-500/20 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2"
+            className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 font-extrabold text-sm tracking-wide shadow-lg shadow-amber-500/20 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
           >
             {loading ? (
-              <span>{stripeEnabled ? 'Redirecting to Stripe...' : 'Deploying Bid...'}</span>
-            ) : stripeEnabled ? (
+              <span>{isPaymentEnabled ? 'Processing Razorpay Checkout...' : 'Deploying Bid...'}</span>
+            ) : isPaymentEnabled ? (
               <>
                 <Zap className="w-4 h-4 fill-current" />
-                <span>PAY {formatCurrency(depositAmount)} VIA STRIPE CHECKOUT</span>
+                <span>PAY {formatCurrency(depositAmount)} VIA RAZORPAY</span>
               </>
             ) : willImmediatelyDethrone ? (
               <>

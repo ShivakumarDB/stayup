@@ -1,11 +1,12 @@
 export default function handler(req: any, res: any) {
-  const rawKey = process.env.STRIPE_SECRET_KEY || '';
-  const rawWebhook = process.env.STRIPE_WEBHOOK_SECRET || '';
+  const rawKeyId = process.env.RAZORPAY_KEY_ID || '';
+  const rawKeySecret = process.env.RAZORPAY_KEY_SECRET || '';
+  const rawWebhook = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 
   // Real-time serverless execution log visible directly in Vercel Function Logs
   console.log(`[VERCEL FUNCTION LOG - /api/health] 🚀 Invoked at ${new Date().toISOString()}`);
-  console.log(`[VERCEL FUNCTION LOG - /api/health] STRIPE_SECRET_KEY present: ${Boolean(rawKey)}, length: ${rawKey.length}, prefix: "${rawKey ? rawKey.slice(0, 7) : 'NONE'}"`);
-  console.log(`[VERCEL FUNCTION LOG - /api/health] STRIPE_WEBHOOK_SECRET present: ${Boolean(rawWebhook)}, length: ${rawWebhook.length}, prefix: "${rawWebhook ? rawWebhook.slice(0, 6) : 'NONE'}"`);
+  console.log(`[VERCEL FUNCTION LOG - /api/health] RAZORPAY_KEY_ID present: ${Boolean(rawKeyId)}, length: ${rawKeyId.length}, prefix: "${rawKeyId ? rawKeyId.slice(0, 8) : 'NONE'}"`);
+  console.log(`[VERCEL FUNCTION LOG - /api/health] RAZORPAY_KEY_SECRET present: ${Boolean(rawKeySecret)}, length: ${rawKeySecret.length}`);
   console.log(`[VERCEL FUNCTION LOG - /api/health] VERCEL_ENV: ${process.env.VERCEL_ENV || 'undefined'}, NODE_ENV: ${process.env.NODE_ENV || 'undefined'}`);
   console.log(`[VERCEL FUNCTION LOG - /api/health] Available process.env keys: ${Object.keys(process.env).filter((k) => !k.startsWith('npm_')).join(', ')}`);
 
@@ -16,13 +17,13 @@ export default function handler(req: any, res: any) {
     status: 'ok',
     serverTime: Date.now(),
     handler: 'vercel-serverless-api-health',
-    stripe: {
-      isKeyPresent: Boolean(rawKey),
-      keyPrefix: rawKey ? rawKey.slice(0, 7) : null,
-      keyLength: rawKey.length,
+    razorpay: {
+      isKeyPresent: Boolean(rawKeyId && rawKeySecret),
+      keyPrefix: rawKeyId ? rawKeyId.slice(0, 8) : null,
+      keyIdLength: rawKeyId.length,
+      isSecretPresent: Boolean(rawKeySecret),
       isWebhookSecretPresent: Boolean(rawWebhook),
-      webhookSecretPrefix: rawWebhook ? rawWebhook.slice(0, 6) : null,
-      isTestMode: rawKey.startsWith('sk_test_'),
+      isTestMode: rawKeyId.startsWith('rzp_test_'),
     },
     vercel: {
       isVercel: Boolean(process.env.VERCEL),

@@ -129,14 +129,14 @@ export default function App() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col selection:bg-amber-500 selection:text-black">
       {/* Sandbox Demo Notice Banner */}
-      {!state.stripeEnabled && (
+      {!state.razorpayEnabled && !state.stripeEnabled && (
         <div className="bg-gradient-to-r from-amber-500/15 via-zinc-900 to-amber-500/15 border-b border-amber-500/25 px-4 py-1.5 text-[11px] font-mono text-amber-300 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-[9px] font-extrabold uppercase tracking-wide text-amber-300 border border-amber-500/30">
               Interactive Sandbox
             </span>
             <span className="text-zinc-300">
-              All burn rates & spectator counters are live and transparent. (Add <code className="text-amber-400">STRIPE_SECRET_KEY</code> to enable live card billing).
+              All burn rates & spectator counters are live and transparent. (Set <code className="text-amber-400">RAZORPAY_KEY_ID</code> & <code className="text-amber-400">RAZORPAY_KEY_SECRET</code> to enable live payment checkout).
             </span>
           </div>
           <button
@@ -170,6 +170,8 @@ export default function App() {
         onSimulateRival={handleSimulateRival}
         onResetState={handleResetState}
         isSimulating={isSimulatingRival}
+        razorpayEnabled={state.razorpayEnabled}
+        razorpayTestMode={state.razorpayTestMode}
         stripeEnabled={state.stripeEnabled}
         stripeTestMode={state.stripeTestMode}
       />
@@ -248,6 +250,9 @@ export default function App() {
         onClose={() => setIsBidModalOpen(false)}
         minRate={state.minRate}
         currentKingRate={state.currentKing?.ratePerHour}
+        razorpayEnabled={state.razorpayEnabled}
+        razorpayTestMode={state.razorpayTestMode}
+        razorpayKeyId={state.razorpayKeyId}
         stripeEnabled={state.stripeEnabled}
         stripeTestMode={state.stripeTestMode}
         onBidSuccess={refreshState}
@@ -264,6 +269,9 @@ export default function App() {
           targetTitle={refuelTarget.title}
           ratePerHour={refuelTarget.rate}
           currentBalance={refuelTarget.balance}
+          razorpayEnabled={state.razorpayEnabled}
+          razorpayTestMode={state.razorpayTestMode}
+          razorpayKeyId={state.razorpayKeyId}
           stripeEnabled={state.stripeEnabled}
           stripeTestMode={state.stripeTestMode}
           onRefuelSuccess={() => {

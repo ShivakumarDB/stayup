@@ -12,6 +12,8 @@ interface HeaderProps {
   onSimulateRival: () => void;
   onResetState: () => void;
   isSimulating: boolean;
+  razorpayEnabled?: boolean;
+  razorpayTestMode?: boolean;
   stripeEnabled?: boolean;
   stripeTestMode?: boolean;
 }
@@ -25,9 +27,14 @@ export const Header: React.FC<HeaderProps> = ({
   onSimulateRival,
   onResetState,
   isSimulating,
+  razorpayEnabled,
+  razorpayTestMode,
   stripeEnabled,
   stripeTestMode,
 }) => {
+  const isPaymentEnabled = razorpayEnabled || stripeEnabled;
+  const isTestMode = razorpayTestMode !== undefined ? razorpayTestMode : stripeTestMode;
+
   return (
     <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-40">
       <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -45,13 +52,13 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 LIVE TICK
               </span>
-              {stripeEnabled ? (
+              {isPaymentEnabled ? (
                 <span
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-violet-500/15 text-violet-300 border border-violet-500/30"
-                  title={stripeTestMode ? 'Stripe test mode active (sk_test_...) — safe testing with fake card 4242 4242 4242 4242' : 'Stripe live card billing active'}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-blue-500/15 text-blue-300 border border-blue-500/30"
+                  title={isTestMode ? 'Razorpay Test Mode active (rzp_test_...) — safe testing modal' : 'Razorpay Live Checkout active'}
                 >
-                  <ShieldCheck className="w-3 h-3 text-violet-400" />
-                  {stripeTestMode ? 'STRIPE TEST MODE (sk_test)' : 'STRIPE LIVE'}
+                  <ShieldCheck className="w-3 h-3 text-blue-400" />
+                  {isTestMode ? 'RAZORPAY TEST MODE' : 'RAZORPAY LIVE'}
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">

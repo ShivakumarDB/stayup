@@ -3,6 +3,7 @@ import { X, Droplets, Clock, Zap, ShieldCheck } from 'lucide-react';
 import { formatCurrency, formatDurationHuman } from '../utils/formatters';
 import { burnEngine } from '../services/burnEngine';
 import { getOwnerKey } from '../utils/ownerKeys';
+import { openRazorpayCheckout } from '../utils/razorpay';
 
 interface RefuelModalProps {
   isOpen: boolean;
@@ -12,6 +13,9 @@ interface RefuelModalProps {
   ratePerHour: number;
   currentBalance: number;
   onRefuelSuccess: () => void;
+  razorpayEnabled?: boolean;
+  razorpayTestMode?: boolean;
+  razorpayKeyId?: string | null;
   stripeEnabled?: boolean;
   stripeTestMode?: boolean;
 }
@@ -24,6 +28,9 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
   ratePerHour,
   currentBalance,
   onRefuelSuccess,
+  razorpayEnabled,
+  razorpayTestMode,
+  razorpayKeyId,
   stripeEnabled,
   stripeTestMode,
 }) => {
@@ -32,6 +39,9 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const isPaymentEnabled = Boolean(razorpayEnabled || stripeEnabled);
+  const isTestPaymentMode = razorpayTestMode !== undefined ? razorpayTestMode : stripeTestMode;
 
   const burnPerSecond = ratePerHour / 3600;
   const addedSeconds = burnPerSecond > 0 ? amount / burnPerSecond : 0;
@@ -45,9 +55,9 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
     setError(null);
 
     try {
-      if (stripeEnabled) {
-        // Route through Stripe checkout session
-        const res = await fetch('/api/create-checkout-session', {
+      if (isPaymentEnabled) {
+        // Route through Razorpay order creation
+        const res = await fetch('/api/create-razorpay-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -59,12 +69,37 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
         });
 
         const json = await res.json();
-        if (!res.ok || !json.checkoutUrl) {
-          throw new Error(json.error || 'Failed to create Stripe checkout session');
+        if (!res.ok) {
+          throw new Error(json.error || 'Failed to initialize refuel order');
         }
 
-        // Redirect to Stripe checkout
-        window.location.href = json.checkoutUrl;
+        if (json.livePayment && json.orderId) {
+          await openRazorpayCheckout({
+            orderData: {
+              ...json,
+              keyId: json.keyId || razorpayKeyId || undefined,
+            },
+            title: 'Panic Refuel Fuel Injection',
+            description: `+$${amount.toFixed(2)} emergency fuel for "${targetTitle}"`,
+            onSuccess: () => {
+              onRefuelSuccess();
+              onClose();
+              setLoading(false);
+            },
+            onError: (errMsg) => {
+              setError(errMsg);
+              setLoading(false);
+            },
+            onClose: () => {
+              setLoading(false);
+            },
+          });
+          return;
+        }
+
+        // Demo fallback returned by order endpoint
+        onRefuelSuccess();
+        onClose();
         return;
       }
 
@@ -83,7 +118,9 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
         setError('Failed to refuel tank');
       }
     } finally {
-      setLoading(false);
+      if (!isPaymentEnabled) {
+        setLoading(false);
+      }
     }
   };
 
@@ -174,14 +211,14 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
             </div>
           </div>
 
-          {/* Stripe Mode Banner */}
-          {stripeEnabled ? (
-            <div className="p-3 rounded-xl bg-violet-500/10 border border-violet-500/30 text-[11px] text-violet-300 flex items-center gap-2 font-mono">
-              <ShieldCheck className="w-4 h-4 text-violet-400 shrink-0" />
+          {/* Payment & Simulation Mode Banner */}
+          {isPaymentEnabled ? (
+            <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/30 text-[11px] text-blue-300 flex items-center gap-2 font-mono">
+              <ShieldCheck className="w-4 h-4 text-blue-400 shrink-0" />
               <span>
-                {stripeTestMode
-                  ? '⚡ Stripe Test Mode: Test with fake card 4242 4242 4242 4242. Fuel is credited only after webhook confirms payment.'
-                  : '🔒 Live Stripe Checkout: Fuel is credited automatically once webhook confirms payment.'}
+                {isTestPaymentMode
+                  ? '⚡ Razorpay Test Mode: Emergency fuel is verified and pumped upon server HMAC signature check.'
+                  : '🔒 Live Razorpay Checkout: Fuel is credited automatically once payment signature is verified.'}
               </span>
             </div>
           ) : (
@@ -194,16 +231,16 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-sm tracking-wide shadow-lg shadow-emerald-500/20 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2"
+            className="w-full py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-sm tracking-wide shadow-lg shadow-emerald-500/20 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
           >
             <Zap className="w-4 h-4 fill-current" />
             <span>
               {loading
-                ? stripeEnabled
-                  ? 'Redirecting to Stripe...'
+                ? isPaymentEnabled
+                  ? 'Processing Razorpay Checkout...'
                   : 'Injecting Fuel...'
-                : stripeEnabled
-                ? `PAY ${formatCurrency(amount)} VIA STRIPE CHECKOUT`
+                : isPaymentEnabled
+                ? `PAY ${formatCurrency(amount)} VIA RAZORPAY`
                 : `PUMP FUEL NOW (${formatCurrency(amount)})`}
             </span>
           </button>

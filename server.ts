@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import Stripe from 'stripe';
+import Razorpay from 'razorpay';
 import { createServer as createViteServer } from 'vite';
 import { ActivityEvent, FallenKing, GlobalStats, PinnedLink, QueuedLink, ServerState } from './src/types.js';
 
@@ -20,16 +20,19 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
-// Lazy Stripe initialization
-let stripeClient: Stripe | null = null;
-function getStripe(): Stripe | null {
-  if (!stripeClient && process.env.STRIPE_SECRET_KEY) {
-    stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY);
+// Lazy Razorpay initialization
+let razorpayClient: Razorpay | null = null;
+function getRazorpay(): Razorpay | null {
+  const key_id = process.env.RAZORPAY_KEY_ID;
+  const key_secret = process.env.RAZORPAY_KEY_SECRET;
+  if (!razorpayClient && key_id && key_secret) {
+    razorpayClient = new Razorpay({ key_id, key_secret });
   }
-  return stripeClient;
+  return razorpayClient;
 }
 
-// Raw body parser for Stripe webhook signature verification
+// Raw body parser for webhook signature verification
+app.use('/api/razorpay-webhook', express.raw({ type: 'application/json' }));
 app.use('/api/stripe-webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
@@ -278,9 +281,12 @@ function getState(): ServerState {
     },
     minRate: calculateMinRate(),
     serverTime: Date.now(),
-    isDemoMode: !process.env.STRIPE_SECRET_KEY,
-    stripeEnabled: Boolean(process.env.STRIPE_SECRET_KEY),
-    stripeTestMode: process.env.STRIPE_SECRET_KEY ? process.env.STRIPE_SECRET_KEY.startsWith('sk_test_') : true,
+    isDemoMode: !process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET,
+    razorpayEnabled: Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
+    razorpayTestMode: (process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_test_'),
+    razorpayKeyId: process.env.RAZORPAY_KEY_ID || null,
+    stripeEnabled: Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
+    stripeTestMode: (process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_test_'),
   };
 }
 
@@ -388,13 +394,14 @@ setInterval(() => {
 
 // API Endpoints - Health Diagnostic
 const handleHealth = (req: Request, res: Response) => {
-  const rawKey = process.env.STRIPE_SECRET_KEY || '';
-  const rawWebhook = process.env.STRIPE_WEBHOOK_SECRET || '';
+  const rawKeyId = process.env.RAZORPAY_KEY_ID || '';
+  const rawKeySecret = process.env.RAZORPAY_KEY_SECRET || '';
+  const rawWebhook = process.env.RAZORPAY_WEBHOOK_SECRET || '';
 
   // Vercel / Node runtime console logs (visible in Vercel Function Logs)
   console.log(`[VERCEL/NODE RUNTIME LOG] 🚀 GET ${req.originalUrl || req.url} called at ${new Date().toISOString()}`);
-  console.log(`[VERCEL/NODE RUNTIME LOG] STRIPE_SECRET_KEY present: ${Boolean(rawKey)}, length: ${rawKey.length}, prefix: "${rawKey ? rawKey.slice(0, 7) : 'NONE'}"`);
-  console.log(`[VERCEL/NODE RUNTIME LOG] STRIPE_WEBHOOK_SECRET present: ${Boolean(rawWebhook)}, length: ${rawWebhook.length}, prefix: "${rawWebhook ? rawWebhook.slice(0, 6) : 'NONE'}"`);
+  console.log(`[VERCEL/NODE RUNTIME LOG] RAZORPAY_KEY_ID present: ${Boolean(rawKeyId)}, length: ${rawKeyId.length}, prefix: "${rawKeyId ? rawKeyId.slice(0, 8) : 'NONE'}"`);
+  console.log(`[VERCEL/NODE RUNTIME LOG] RAZORPAY_KEY_SECRET present: ${Boolean(rawKeySecret)}, length: ${rawKeySecret.length}`);
   console.log(`[VERCEL/NODE RUNTIME LOG] Environment: NODE_ENV=${process.env.NODE_ENV}, VERCEL=${process.env.VERCEL || 'not set'}, VERCEL_ENV=${process.env.VERCEL_ENV || 'not set'}`);
   console.log(`[VERCEL/NODE RUNTIME LOG] Configured process.env keys: ${Object.keys(process.env).filter((k) => !k.startsWith('npm_')).join(', ')}`);
 
@@ -402,13 +409,13 @@ const handleHealth = (req: Request, res: Response) => {
     status: 'ok',
     serverTime: Date.now(),
     requestUrl: req.originalUrl || req.url,
-    stripe: {
-      isKeyPresent: Boolean(rawKey),
-      keyPrefix: rawKey ? rawKey.slice(0, 7) : null,
-      keyLength: rawKey.length,
+    razorpay: {
+      isKeyPresent: Boolean(rawKeyId && rawKeySecret),
+      keyPrefix: rawKeyId ? rawKeyId.slice(0, 8) : null,
+      keyIdLength: rawKeyId.length,
+      isSecretPresent: Boolean(rawKeySecret),
       isWebhookSecretPresent: Boolean(rawWebhook),
-      webhookSecretPrefix: rawWebhook ? rawWebhook.slice(0, 6) : null,
-      isTestMode: rawKey.startsWith('sk_test_'),
+      isTestMode: rawKeyId.startsWith('rzp_test_'),
     },
     vercel: {
       isVercel: Boolean(process.env.VERCEL),
@@ -465,6 +472,7 @@ function executeBid({
   depositAmount,
   accentColor,
   manageKey: providedManageKey,
+  isPaidRazorpay = false,
   isPaidStripe = false,
 }: {
   title: string;
@@ -475,6 +483,7 @@ function executeBid({
   depositAmount: number;
   accentColor?: string;
   manageKey?: string;
+  isPaidRazorpay?: boolean;
   isPaidStripe?: boolean;
 }): { success: boolean; manageKey: string; isKing: boolean; id: string } {
   const now = Date.now();
@@ -564,7 +573,7 @@ function executeBid({
       id: `act-${now}-crown`,
       type: 'crown',
       title: '👑 New King Crowned!',
-      description: `${authorHandle} pinned "${title}" at #1 with $${rate.toFixed(2)}/hr!${isPaidStripe ? ' (Verified via Stripe)' : ''}`,
+      description: `${authorHandle} pinned "${title}" at #1 with $${rate.toFixed(2)}/hr!${isPaidRazorpay ? ' (Verified via Razorpay)' : isPaidStripe ? ' (Verified via Stripe)' : ''}`,
       timestamp: now,
       rate,
       amount: deposit,
@@ -608,16 +617,18 @@ function executeBid({
   }
 }
 
-// Pure execution of top up / refuel (invoked by webhook or sandbox)
+// Pure execution of top up / refuel (invoked by webhook, payment verification, or sandbox)
 function executeTopup({
   id,
   amount,
   manageKey,
+  isPaidRazorpay = false,
   isPaidStripe = false,
 }: {
   id: string;
   amount: number;
   manageKey?: string;
+  isPaidRazorpay?: boolean;
   isPaidStripe?: boolean;
 }): { success: boolean; isOwner?: boolean; balance?: number; error?: string } {
   const numAmount = Number(amount);
@@ -636,7 +647,7 @@ function executeTopup({
       id: `act-${now}-refuel`,
       type: 'refuel',
       title: isOwner ? '⛽ Owner Refueled Tank' : '🎁 Supporter Fuel Boost!',
-      description: `${isOwner ? currentKing.author : 'A supporter'} injected +$${numAmount.toFixed(2)} fuel into "${currentKing.title}"!${isPaidStripe ? ' (Verified via Stripe)' : ''}`,
+      description: `${isOwner ? currentKing.author : 'A supporter'} injected +$${numAmount.toFixed(2)} fuel into "${currentKing.title}"!${isPaidRazorpay ? ' (Verified via Razorpay)' : isPaidStripe ? ' (Verified via Stripe)' : ''}`,
       timestamp: now,
       amount: numAmount,
       author: currentKing.author,
@@ -659,18 +670,20 @@ function executeTopup({
   return { success: false, error: 'Link not found or no longer active' };
 }
 
-// Pure execution of boost rate (invoked by webhook or sandbox)
+// Pure execution of boost rate (invoked by webhook, payment verification, or sandbox)
 function executeBoostRate({
   id,
   newRate,
   depositAmount = 0,
   manageKey,
+  isPaidRazorpay = false,
   isPaidStripe = false,
 }: {
   id: string;
   newRate: number;
   depositAmount?: number;
   manageKey?: string;
+  isPaidRazorpay?: boolean;
   isPaidStripe?: boolean;
 }): { success: boolean; king?: PinnedLink; error?: string; status?: number } {
   const rate = Number(newRate);
@@ -711,7 +724,7 @@ function executeBoostRate({
     id: `act-${now}-boost`,
     type: 'rate_boost',
     title: '🛡️ Rate Defense Activated!',
-    description: `${currentKing.author} raised hourly burn rate from $${oldRate}/hr to $${rate}/hr${extraDeposit > 0 ? ` (+${extraDeposit.toFixed(2)} fuel)` : ''}!${isPaidStripe ? ' (Verified via Stripe)' : ''}`,
+    description: `${currentKing.author} raised hourly burn rate from $${oldRate}/hr to $${rate}/hr${extraDeposit > 0 ? ` (+${extraDeposit.toFixed(2)} fuel)` : ''}!${isPaidRazorpay ? ' (Verified via Razorpay)' : isPaidStripe ? ' (Verified via Stripe)' : ''}`,
     timestamp: now,
     rate,
     amount: extraDeposit,
@@ -745,12 +758,12 @@ app.post('/api/bid', (req: Request, res: Response) => {
     return;
   }
 
-  // If live/test Stripe is configured, prompt checkout creation instead
-  const stripe = getStripe();
-  if (stripe && !req.body.bypassStripe) {
+  // If live/test Razorpay is configured, prompt order creation instead
+  const razorpay = getRazorpay();
+  if (razorpay && !req.body.bypassRazorpay && !req.body.bypassStripe) {
     res.status(400).json({
-      error: 'Stripe payments are enabled. Please use /api/create-checkout-session to place bid.',
-      requiresStripe: true,
+      error: 'Razorpay payments are enabled. Please use /api/create-razorpay-order to place bid.',
+      requiresRazorpay: true,
     });
     return;
   }
@@ -763,7 +776,7 @@ app.post('/api/bid', (req: Request, res: Response) => {
     ratePerHour: rate,
     depositAmount: deposit,
     accentColor,
-    isPaidStripe: false,
+    isPaidRazorpay: false,
   });
 
   res.json({
@@ -775,10 +788,10 @@ app.post('/api/bid', (req: Request, res: Response) => {
   });
 });
 
-// Create Stripe Checkout Session (Supports 'bid', 'topup', and 'boost_rate')
-// CRITICAL: DOES NOT CROWN, REFUEL, OR BOOST ON CHECKOUT REQUEST!
-// ONLY RETURNS CHECKOUT URL. ALL ACTIONS EXECUTE INSIDE STRIPE WEBHOOK AFTER PAYMENT CONFIRMATION.
-app.post('/api/create-checkout-session', async (req: Request, res: Response) => {
+// Create Razorpay Order (Supports 'bid', 'topup', and 'boost_rate')
+// CRITICAL: DOES NOT CROWN, REFUEL, OR BOOST ON ORDER CREATION!
+// ONLY RETURNS ORDER ID & KEY ID. ALL ACTIONS EXECUTE UPON SIGNATURE VERIFICATION.
+const handleCreateOrder = async (req: Request, res: Response) => {
   const {
     action = 'bid',
     title,
@@ -793,8 +806,7 @@ app.post('/api/create-checkout-session', async (req: Request, res: Response) => 
     newRate,
   } = req.body;
 
-  const origin = req.headers.origin || 'http://localhost:3000';
-  const stripe = getStripe();
+  const razorpay = getRazorpay();
 
   // === ACTION 1: BID (Crown or Queue) ===
   if (action === 'bid' || (!action && title && url)) {
@@ -807,12 +819,12 @@ app.post('/api/create-checkout-session', async (req: Request, res: Response) => 
     const deposit = Number(depositAmount);
 
     if (isNaN(rate) || rate < 10 || isNaN(deposit) || deposit < 5) {
-      res.status(400).json({ error: 'Invalid rate or deposit amount.' });
+      res.status(400).json({ error: 'Invalid rate (min $10/hr) or fuel deposit (min $5.00).' });
       return;
     }
 
-    if (!stripe) {
-      // Sandbox mode fallback
+    if (!razorpay) {
+      // Sandbox fallback
       const result = executeBid({
         title,
         url,
@@ -826,7 +838,7 @@ app.post('/api/create-checkout-session', async (req: Request, res: Response) => 
       res.json({
         demoMode: true,
         success: true,
-        message: 'Sandbox bid placed (no Stripe keys configured).',
+        message: 'Sandbox bid placed (no Razorpay keys configured).',
         manageKey: result.manageKey,
         id: result.id,
         isKing: result.isKing,
@@ -836,68 +848,54 @@ app.post('/api/create-checkout-session', async (req: Request, res: Response) => 
 
     try {
       const manageKey = `mk_${crypto.randomBytes(16).toString('hex')}`;
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
-        line_items: [
-          {
-            price_data: {
-              currency: 'usd',
-              product_data: {
-                name: `Pin "${title}" on stayup.lol`,
-                description: `Burn rate: $${rate.toFixed(2)}/hr • Fuel deposit: $${deposit.toFixed(2)}`,
-              },
-              unit_amount: Math.round(deposit * 100),
-            },
-            quantity: 1,
-          },
-        ],
-        mode: 'payment',
-        metadata: {
+      const currency = process.env.RAZORPAY_CURRENCY || 'USD';
+      const order = await razorpay.orders.create({
+        amount: Math.round(deposit * 100), // in smallest currency unit (cents or paise)
+        currency,
+        receipt: `rcpt_bid_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        notes: {
           action: 'bid',
-          title,
-          url,
-          tagline: tagline || '',
-          author,
+          title: String(title).slice(0, 100),
+          url: String(url).slice(0, 200),
+          tagline: String(tagline || '').slice(0, 150),
+          author: String(author).slice(0, 50),
           ratePerHour: rate.toString(),
           depositAmount: deposit.toString(),
           accentColor: accentColor || 'amber',
           manageKey,
         },
-        success_url: `${origin}/?payment=success&session_id={CHECKOUT_SESSION_ID}&manage_key=${manageKey}`,
-        cancel_url: `${origin}/?payment=cancelled`,
       });
 
-      // NOTICE: Nothing crowned yet! Returns checkoutUrl only.
       res.json({
-        checkoutUrl: session.url,
-        sessionId: session.id,
+        success: true,
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
         manageKey,
+        notes: order.notes,
         livePayment: true,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Stripe checkout creation failed';
+      const message = err instanceof Error ? err.message : 'Razorpay order creation failed';
+      console.error('[Razorpay Order Creation Error]', err);
       res.status(500).json({ error: message });
     }
     return;
   }
 
-  // === ACTION 2: TOPUP (Panic Refuel) ===
+  // === ACTION 2: TOPUP (Refuel) ===
   if (action === 'topup') {
     const target = targetId || req.body.id;
     const numAmount = Number(amount || depositAmount);
     const manageKey = (req.headers['x-manage-key'] as string) || req.body.manageKey;
 
     if (!target || isNaN(numAmount) || numAmount < 1) {
-      res.status(400).json({ error: 'Valid target ID and amount (minimum $1) required.' });
+      res.status(400).json({ error: 'Valid target ID and amount (minimum $1.00) required.' });
       return;
     }
 
-    const targetTitle =
-      (currentKing && currentKing.id === target ? currentKing.title : queue.find((q) => q.id === target)?.title) ||
-      'stayup.lol link';
-
-    if (!stripe) {
-      // Sandbox mode fallback
+    if (!razorpay) {
       const result = executeTopup({ id: target, amount: numAmount, manageKey });
       res.json({
         demoMode: true,
@@ -909,40 +907,31 @@ app.post('/api/create-checkout-session', async (req: Request, res: Response) => 
     }
 
     try {
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
-        line_items: [
-          {
-            price_data: {
-              currency: 'usd',
-              product_data: {
-                name: `Emergency Fuel Injection: ${targetTitle}`,
-                description: `+$${numAmount.toFixed(2)} fuel added to prevent drop on stayup.lol`,
-              },
-              unit_amount: Math.round(numAmount * 100),
-            },
-            quantity: 1,
-          },
-        ],
-        mode: 'payment',
-        metadata: {
+      const currency = process.env.RAZORPAY_CURRENCY || 'USD';
+      const order = await razorpay.orders.create({
+        amount: Math.round(numAmount * 100),
+        currency,
+        receipt: `rcpt_topup_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        notes: {
           action: 'topup',
-          targetId: target,
+          targetId: String(target),
           amount: numAmount.toString(),
           manageKey: manageKey || '',
         },
-        success_url: `${origin}/?payment=topup_success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${origin}/?payment=cancelled`,
       });
 
-      // NOTICE: No fuel added yet! Returns checkoutUrl only.
       res.json({
-        checkoutUrl: session.url,
-        sessionId: session.id,
+        success: true,
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+        notes: order.notes,
         livePayment: true,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Stripe topup checkout failed';
+      const message = err instanceof Error ? err.message : 'Razorpay topup order creation failed';
+      console.error('[Razorpay Topup Order Error]', err);
       res.status(500).json({ error: message });
     }
     return;
@@ -970,8 +959,7 @@ app.post('/api/create-checkout-session', async (req: Request, res: Response) => 
       return;
     }
 
-    if (!stripe || deposit <= 0) {
-      // Sandbox mode or free rate adjustment
+    if (!razorpay || deposit <= 0) {
       const result = executeBoostRate({
         id: target,
         newRate: rate,
@@ -979,7 +967,7 @@ app.post('/api/create-checkout-session', async (req: Request, res: Response) => 
         manageKey,
       });
       res.json({
-        demoMode: !stripe,
+        demoMode: !razorpay,
         success: result.success,
         king: result.king,
       });
@@ -987,136 +975,241 @@ app.post('/api/create-checkout-session', async (req: Request, res: Response) => 
     }
 
     try {
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
-        line_items: [
-          {
-            price_data: {
-              currency: 'usd',
-              product_data: {
-                name: `Raise Rate Defense: $${rate}/hr ("${currentKing.title}")`,
-                description: `Lock in defensive rate with +$${deposit.toFixed(2)} emergency fuel`,
-              },
-              unit_amount: Math.round(deposit * 100),
-            },
-            quantity: 1,
-          },
-        ],
-        mode: 'payment',
-        metadata: {
+      const currency = process.env.RAZORPAY_CURRENCY || 'USD';
+      const order = await razorpay.orders.create({
+        amount: Math.round(deposit * 100),
+        currency,
+        receipt: `rcpt_boost_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        notes: {
           action: 'boost_rate',
-          targetId: target,
+          targetId: String(target),
           newRate: rate.toString(),
           depositAmount: deposit.toString(),
           manageKey: manageKey || '',
         },
-        success_url: `${origin}/?payment=boost_success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${origin}/?payment=cancelled`,
       });
 
-      // NOTICE: Rate not updated yet! Returns checkoutUrl only.
       res.json({
-        checkoutUrl: session.url,
-        sessionId: session.id,
+        success: true,
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+        notes: order.notes,
         livePayment: true,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Stripe boost checkout failed';
+      const message = err instanceof Error ? err.message : 'Razorpay boost order creation failed';
+      console.error('[Razorpay Boost Order Error]', err);
       res.status(500).json({ error: message });
     }
     return;
   }
 
   res.status(400).json({ error: 'Unsupported action type' });
-});
+};
 
-// Stripe Webhook Endpoint: The ONLY place where crown, topup, and boost execute when Stripe is active!
-app.post('/api/stripe-webhook', async (req: Request, res: Response) => {
-  const stripe = getStripe();
-  if (!stripe) {
-    res.status(400).send('Stripe not configured');
-    return;
-  }
+app.post('/api/create-razorpay-order', handleCreateOrder);
+app.post('/api/create-checkout-session', handleCreateOrder);
 
-  const sig = req.headers['stripe-signature'];
-  let event: Stripe.Event;
+// Server-Side Payment Signature Verification
+// CRITICAL: Applies crown, topup, or rate boost ONLY after verifying HMAC SHA256 signature
+app.post('/api/verify-razorpay-payment', async (req: Request, res: Response) => {
+  const {
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+    notes: clientNotes,
+  } = req.body;
 
-  try {
-    if (process.env.STRIPE_WEBHOOK_SECRET && sig) {
-      event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-    } else {
-      event = JSON.parse(req.body.toString());
-    }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Webhook error';
-    console.error('Webhook signature verification failed:', message);
-    res.status(400).send(`Webhook Error: ${message}`);
-    return;
-  }
-
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object as Stripe.Checkout.Session;
-    const meta = session.metadata;
-
-    if (meta) {
-      const action = meta.action || (meta.title && meta.url ? 'bid' : '');
-
-      if (action === 'bid') {
-        // CROWN OR QUEUE LINK
-        executeBid({
-          title: meta.title,
-          url: meta.url,
-          tagline: meta.tagline,
-          author: meta.author,
-          ratePerHour: Number(meta.ratePerHour),
-          depositAmount: Number(meta.depositAmount),
-          accentColor: meta.accentColor,
-          manageKey: meta.manageKey,
-          isPaidStripe: true,
-        });
-        console.log(`[Stripe Webhook Confirmed] Crown/Bid payment confirmed for "${meta.title}" ($${meta.depositAmount})`);
-      } else if (action === 'topup') {
-        // REFUEL FUEL TANK
-        executeTopup({
-          id: meta.targetId,
-          amount: Number(meta.amount),
-          manageKey: meta.manageKey,
-          isPaidStripe: true,
-        });
-        console.log(`[Stripe Webhook Confirmed] Topup confirmed for ${meta.targetId} ($${meta.amount})`);
-      } else if (action === 'boost_rate') {
-        // BOOST DEFENSIVE RATE
-        executeBoostRate({
-          id: meta.targetId,
-          newRate: Number(meta.newRate),
-          depositAmount: Number(meta.depositAmount || 0),
-          manageKey: meta.manageKey,
-          isPaidStripe: true,
-        });
-        console.log(`[Stripe Webhook Confirmed] Boost rate confirmed for ${meta.targetId} ($${meta.newRate}/hr)`);
-      }
-    }
-  }
-
-  res.json({ received: true });
-});
-
-// Top up fuel to prevent starvation
-// In Stripe mode, clients route through /api/create-checkout-session (action: 'topup')
-app.post('/api/topup', (req: Request, res: Response) => {
-  const { id, amount } = req.body;
-  const manageKey = (req.headers['x-manage-key'] as string) || req.body.manageKey;
-  const stripe = getStripe();
-
-  if (stripe && !req.body.bypassStripe) {
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
     res.status(400).json({
-      error: 'Stripe payments are enabled. Please create a checkout session via /api/create-checkout-session (action: topup).',
-      requiresStripe: true,
+      error: 'Missing required Razorpay parameters: razorpay_order_id, razorpay_payment_id, and razorpay_signature are required.',
     });
     return;
   }
 
-  const result = executeTopup({ id, amount, manageKey, isPaidStripe: false });
+  const secret = process.env.RAZORPAY_KEY_SECRET;
+  if (!secret) {
+    res.status(500).json({ error: 'Server misconfiguration: RAZORPAY_KEY_SECRET is not configured.' });
+    return;
+  }
+
+  // Server-side HMAC SHA256 signature calculation
+  const generatedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+    .digest('hex');
+
+  if (generatedSignature !== razorpay_signature) {
+    console.error(`[Razorpay Security Alert] Signature verification failed for order ${razorpay_order_id}!`);
+    res.status(400).json({ error: 'Payment signature verification failed. Untrusted payment.' });
+    return;
+  }
+
+  console.log(`[Razorpay Signature Verified ✅] Order ${razorpay_order_id} verified with payment ${razorpay_payment_id}`);
+
+  // Fetch authoritative notes from Razorpay API or fall back to verified payload
+  let notes: Record<string, string> = clientNotes || {};
+  const razorpay = getRazorpay();
+  if (razorpay) {
+    try {
+      const order = await razorpay.orders.fetch(razorpay_order_id);
+      if (order && order.notes) {
+        notes = order.notes as Record<string, string>;
+      }
+    } catch (fetchErr) {
+      console.warn('Could not fetch authoritative order notes from Razorpay, using verified client notes:', fetchErr);
+    }
+  }
+
+  const action = notes.action || 'bid';
+
+  if (action === 'bid') {
+    const result = executeBid({
+      title: notes.title,
+      url: notes.url,
+      tagline: notes.tagline,
+      author: notes.author,
+      ratePerHour: Number(notes.ratePerHour),
+      depositAmount: Number(notes.depositAmount),
+      accentColor: notes.accentColor,
+      manageKey: notes.manageKey,
+      isPaidRazorpay: true,
+    });
+
+    res.json({
+      success: true,
+      verified: true,
+      action: 'bid',
+      manageKey: result.manageKey,
+      id: result.id,
+      isKing: result.isKing,
+      message: result.isKing ? '👑 Crowned #1 on stayup.lol!' : '⚔️ Entered challenger queue!',
+    });
+    return;
+  }
+
+  if (action === 'topup') {
+    const result = executeTopup({
+      id: notes.targetId,
+      amount: Number(notes.amount),
+      manageKey: notes.manageKey,
+      isPaidRazorpay: true,
+    });
+
+    res.json({
+      success: true,
+      verified: true,
+      action: 'topup',
+      balance: result.balance,
+      isOwner: result.isOwner,
+      message: 'Fuel injected successfully!',
+    });
+    return;
+  }
+
+  if (action === 'boost_rate') {
+    const result = executeBoostRate({
+      id: notes.targetId,
+      newRate: Number(notes.newRate),
+      depositAmount: Number(notes.depositAmount || 0),
+      manageKey: notes.manageKey,
+      isPaidRazorpay: true,
+    });
+
+    res.json({
+      success: true,
+      verified: true,
+      action: 'boost_rate',
+      king: result.king,
+      message: 'Rate defense boosted successfully!',
+    });
+    return;
+  }
+
+  res.status(400).json({ error: 'Unknown action in verified order notes.' });
+});
+
+// Razorpay Webhook Endpoint (Backup asynchronous payment verification)
+app.post('/api/razorpay-webhook', async (req: Request, res: Response) => {
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
+  const signature = req.headers['x-razorpay-signature'] as string;
+
+  if (webhookSecret && signature) {
+    const rawBody = req.body.toString();
+    const expected = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+    if (expected !== signature) {
+      console.error('[Razorpay Webhook Error] Invalid webhook signature');
+      res.status(400).send('Invalid signature');
+      return;
+    }
+  }
+
+  try {
+    const event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    console.log(`[Razorpay Webhook Event] ${event.event} received`);
+
+    if (event.event === 'order.paid' || event.event === 'payment.captured') {
+      const entity = event.payload?.payment?.entity || event.payload?.order?.entity;
+      const notes = entity?.notes;
+
+      if (notes && notes.action) {
+        if (notes.action === 'bid') {
+          executeBid({
+            title: notes.title,
+            url: notes.url,
+            tagline: notes.tagline,
+            author: notes.author,
+            ratePerHour: Number(notes.ratePerHour),
+            depositAmount: Number(notes.depositAmount),
+            accentColor: notes.accentColor,
+            manageKey: notes.manageKey,
+            isPaidRazorpay: true,
+          });
+          console.log(`[Razorpay Webhook Confirmed] Bid executed for "${notes.title}"`);
+        } else if (notes.action === 'topup') {
+          executeTopup({
+            id: notes.targetId,
+            amount: Number(notes.amount),
+            manageKey: notes.manageKey,
+            isPaidRazorpay: true,
+          });
+          console.log(`[Razorpay Webhook Confirmed] Topup executed for ${notes.targetId}`);
+        } else if (notes.action === 'boost_rate') {
+          executeBoostRate({
+            id: notes.targetId,
+            newRate: Number(notes.newRate),
+            depositAmount: Number(notes.depositAmount || 0),
+            manageKey: notes.manageKey,
+            isPaidRazorpay: true,
+          });
+          console.log(`[Razorpay Webhook Confirmed] Boost rate executed for ${notes.targetId}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error processing Razorpay webhook:', err);
+  }
+
+  res.json({ status: 'ok' });
+});
+
+// Top up fuel to prevent starvation (Sandbox or direct fallback)
+app.post('/api/topup', (req: Request, res: Response) => {
+  const { id, amount } = req.body;
+  const manageKey = (req.headers['x-manage-key'] as string) || req.body.manageKey;
+  const razorpay = getRazorpay();
+
+  if (razorpay && !req.body.bypassRazorpay && !req.body.bypassStripe) {
+    res.status(400).json({
+      error: 'Razorpay payments are enabled. Please create an order via /api/create-razorpay-order (action: topup).',
+      requiresRazorpay: true,
+    });
+    return;
+  }
+
+  const result = executeTopup({ id, amount, manageKey, isPaidRazorpay: false });
   if (!result.success) {
     res.status(400).json({ error: result.error || 'Failed to refuel' });
     return;
@@ -1128,12 +1221,12 @@ app.post('/api/topup', (req: Request, res: Response) => {
 app.post('/api/boost-rate', (req: Request, res: Response) => {
   const { id, newRate, depositAmount } = req.body;
   const manageKey = (req.headers['x-manage-key'] as string) || req.body.manageKey;
-  const stripe = getStripe();
+  const razorpay = getRazorpay();
 
-  if (stripe && req.body.paidBoost && !req.body.bypassStripe) {
+  if (razorpay && req.body.paidBoost && !req.body.bypassRazorpay && !req.body.bypassStripe) {
     res.status(400).json({
-      error: 'Stripe payments are enabled. Please create a checkout session via /api/create-checkout-session (action: boost_rate).',
-      requiresStripe: true,
+      error: 'Razorpay payments are enabled. Please create an order via /api/create-razorpay-order (action: boost_rate).',
+      requiresRazorpay: true,
     });
     return;
   }
@@ -1143,7 +1236,7 @@ app.post('/api/boost-rate', (req: Request, res: Response) => {
     newRate: Number(newRate),
     depositAmount: Number(depositAmount || 0),
     manageKey,
-    isPaidStripe: false,
+    isPaidRazorpay: false,
   });
 
   if (!result.success) {
