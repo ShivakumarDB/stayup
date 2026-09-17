@@ -8,6 +8,8 @@ interface LiveActivityFeedProps {
 }
 
 export const LiveActivityFeed: React.FC<LiveActivityFeedProps> = ({ activity }) => {
+  const safeActivity = Array.isArray(activity) ? activity : [];
+
   const getEventIcon = (type: ActivityEvent['type']) => {
     switch (type) {
       case 'crown':
@@ -45,10 +47,10 @@ export const LiveActivityFeed: React.FC<LiveActivityFeedProps> = ({ activity }) 
       </div>
 
       <div className="space-y-2.5 overflow-y-auto max-h-[460px] pr-1 scrollbar-thin scrollbar-thumb-zinc-800">
-        {activity.length === 0 ? (
+        {safeActivity.length === 0 ? (
           <p className="text-zinc-500 text-xs text-center py-8">No events logged yet.</p>
         ) : (
-          activity.map((event) => (
+          safeActivity.map((event) => (
             <div
               key={event.id}
               className="p-3 rounded-xl bg-zinc-950/70 border border-zinc-800/70 flex items-start gap-3 hover:border-zinc-700/80 transition-colors"

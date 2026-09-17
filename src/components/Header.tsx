@@ -35,6 +35,9 @@ export const Header: React.FC<HeaderProps> = ({
   const isPaymentEnabled = razorpayEnabled || stripeEnabled;
   const isTestMode = razorpayTestMode !== undefined ? razorpayTestMode : stripeTestMode;
 
+  const currentSpectators = stats?.currentSpectators ?? 1;
+  const totalBurnedAllTime = stats?.totalBurnedAllTime ?? 0;
+
   return (
     <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-40">
       <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -80,7 +83,7 @@ export const Header: React.FC<HeaderProps> = ({
             title="Real-time connected viewers watching the live burn ticker"
           >
             <Eye className="w-3.5 h-3.5 text-zinc-400" />
-            <span className="font-mono font-medium text-amber-400">{stats.currentSpectators}</span>
+            <span className="font-mono font-medium text-amber-400">{currentSpectators}</span>
             <span className="text-zinc-500 hidden sm:inline">live</span>
           </div>
 
@@ -89,7 +92,7 @@ export const Header: React.FC<HeaderProps> = ({
             <Flame className="w-3.5 h-3.5 text-orange-400" />
             <span className="text-zinc-500 hidden sm:inline">Burned:</span>
             <span className="font-mono font-medium text-orange-400">
-              {formatCurrency(stats.totalBurnedAllTime)}
+              {formatCurrency(totalBurnedAllTime)}
             </span>
           </div>
 

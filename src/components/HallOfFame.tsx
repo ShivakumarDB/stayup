@@ -9,8 +9,9 @@ interface HallOfFameProps {
 
 export const HallOfFame: React.FC<HallOfFameProps> = ({ fallenKings }) => {
   const [sortMode, setSortMode] = useState<'recent' | 'burned' | 'duration'>('burned');
+  const safeFallen = Array.isArray(fallenKings) ? fallenKings : [];
 
-  const sorted = [...fallenKings].sort((a, b) => {
+  const sorted = [...safeFallen].sort((a, b) => {
     if (sortMode === 'burned') return b.totalBurned - a.totalBurned;
     if (sortMode === 'duration') return b.reignSeconds - a.reignSeconds;
     return b.dethronedAt - a.dethronedAt;
@@ -27,7 +28,7 @@ export const HallOfFame: React.FC<HallOfFameProps> = ({ fallenKings }) => {
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               Hall of Fallen Kings
               <span className="text-xs text-zinc-500 font-normal">
-                ({fallenKings.length} monarchs dethroned)
+                ({safeFallen.length} monarchs dethroned)
               </span>
             </h2>
             <p className="text-xs text-zinc-400">

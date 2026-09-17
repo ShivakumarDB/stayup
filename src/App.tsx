@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ServerState } from './types';
+import { ServerState, GlobalStats } from './types';
 import { Header } from './components/Header';
 import { KingThrone } from './components/KingThrone';
 import { ChallengerQueue } from './components/ChallengerQueue';
@@ -16,6 +16,14 @@ import { BoostRateModal } from './components/BoostRateModal';
 import { sounds } from './utils/audio';
 import { Flame, Zap } from 'lucide-react';
 import { burnEngine } from './services/burnEngine';
+
+const defaultStats: GlobalStats = {
+  totalBurnedAllTime: 0,
+  totalReigns: 0,
+  highestRateEver: 0,
+  longestReignSeconds: 0,
+  currentSpectators: 1,
+};
 
 export default function App() {
   const [state, setState] = useState<ServerState>(() => burnEngine.getState());
@@ -54,6 +62,7 @@ export default function App() {
     burnEngine.checkPaymentHealth().then((health) => {
       setState((prev) => ({
         ...prev,
+        stats: prev?.stats || defaultStats,
         razorpayEnabled: health.razorpayEnabled,
         razorpayTestMode: health.razorpayTestMode,
         razorpayKeyId: health.razorpayKeyId,
@@ -172,8 +181,8 @@ export default function App() {
 
       {/* Header */}
       <Header
-        stats={state.stats}
-        minRate={state.minRate}
+        stats={state.stats || defaultStats}
+        minRate={state.minRate || 20}
         isMuted={isMuted}
         onToggleMute={handleToggleMute}
         onOpenBidModal={() => setIsBidModalOpen(true)}
@@ -216,7 +225,7 @@ export default function App() {
           <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto font-mono text-zinc-400">
             <span>Minimum to outbid #1:</span>
             <span className="font-bold text-amber-400 px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700">
-              ${state.minRate}/hr
+              ${state.minRate || 20}/hr
             </span>
           </div>
         </div>
@@ -226,18 +235,18 @@ export default function App() {
           {/* Left Column: Challenger Queue & Hall of Fame (7 cols) */}
           <div className="lg:col-span-7 space-y-6">
             <ChallengerQueue
-              queue={state.queue}
-              minRateToOutbidKing={state.minRate}
+              queue={state.queue || []}
+              minRateToOutbidKing={state.minRate || 20}
               onOpenBidModal={() => setIsBidModalOpen(true)}
               onRefuelQueued={handleOpenRefuelForQueue}
             />
 
-            <HallOfFame fallenKings={state.fallenKings} />
+            <HallOfFame fallenKings={state.fallenKings || []} />
           </div>
 
           {/* Right Column: Live Activity Feed (5 cols) */}
           <div className="lg:col-span-5">
-            <LiveActivityFeed activity={state.activity} />
+            <LiveActivityFeed activity={state.activity || []} />
           </div>
         </div>
       </main>

@@ -16,6 +16,8 @@ export const ChallengerQueue: React.FC<ChallengerQueueProps> = ({
   onOpenBidModal,
   onRefuelQueued,
 }) => {
+  const safeQueue = Array.isArray(queue) ? queue : [];
+
   return (
     <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 p-5 backdrop-blur-sm">
       <div className="flex items-center justify-between gap-2 mb-4">
@@ -27,7 +29,7 @@ export const ChallengerQueue: React.FC<ChallengerQueueProps> = ({
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               Challenger Queue
               <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-medium bg-zinc-800 text-zinc-300">
-                {queue.length} in line
+                {safeQueue.length} in line
               </span>
             </h2>
             <p className="text-xs text-zinc-400">
@@ -45,13 +47,13 @@ export const ChallengerQueue: React.FC<ChallengerQueueProps> = ({
         </button>
       </div>
 
-      {queue.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-800 p-6 text-center text-zinc-500 text-xs">
+      {safeQueue.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-zinc-800 p-8 text-center text-zinc-500 text-xs">
           No challengers in queue right now. Queue a link with fuel to automatically take #1 the second the current king starves!
         </div>
       ) : (
         <div className="space-y-3">
-          {queue.map((item, index) => {
+          {safeQueue.map((item, index) => {
             const rank = index + 2;
             const theme = ACCENT_THEMES[item.accentColor] || ACCENT_THEMES.cyan;
             const burnSec = item.ratePerHour / 3600;

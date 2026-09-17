@@ -310,13 +310,33 @@ class BurnEngine {
       // Check if response is real JSON and not an HTML fallback page (common on static Vercel)
       const contentType = res.headers.get('content-type') || '';
       if (res.ok && contentType.includes('application/json')) {
-        const serverData: ServerState = await res.json();
-        if (serverData && serverData.currentKing) {
+        const serverData: Partial<ServerState> = await res.json();
+        if (serverData && typeof serverData === 'object') {
           serverReachable = true;
           this.isUsingServer = true;
+
+          const defaultStats: GlobalStats = {
+            totalBurnedAllTime: 0,
+            totalReigns: 0,
+            highestRateEver: 0,
+            longestReignSeconds: 0,
+            currentSpectators: 1,
+          };
+
           // Preserve payment health info if serverData didn't populate it
           this.state = {
+            ...this.state,
             ...serverData,
+            currentKing: serverData.currentKing !== undefined ? serverData.currentKing : this.state.currentKing,
+            queue: Array.isArray(serverData.queue) ? serverData.queue : (this.state.queue || []),
+            fallenKings: Array.isArray(serverData.fallenKings) ? serverData.fallenKings : (this.state.fallenKings || []),
+            activity: Array.isArray(serverData.activity) ? serverData.activity : (this.state.activity || []),
+            stats: {
+              ...defaultStats,
+              ...(this.state.stats || {}),
+              ...(serverData.stats || {}),
+            },
+            minRate: typeof serverData.minRate === 'number' ? serverData.minRate : (this.state.minRate || 20),
             razorpayEnabled: this.state.razorpayEnabled ?? serverData.razorpayEnabled,
             razorpayTestMode: this.state.razorpayTestMode ?? serverData.razorpayTestMode,
             razorpayKeyId: this.state.razorpayKeyId ?? serverData.razorpayKeyId,
@@ -342,8 +362,27 @@ class BurnEngine {
 
       this.eventSource.addEventListener('state_update', (e) => {
         try {
-          const newState: ServerState = JSON.parse(e.data);
-          this.state = newState;
+          const newState: Partial<ServerState> = JSON.parse(e.data);
+          const defaultStats: GlobalStats = {
+            totalBurnedAllTime: 0,
+            totalReigns: 0,
+            highestRateEver: 0,
+            longestReignSeconds: 0,
+            currentSpectators: 1,
+          };
+          this.state = {
+            ...this.state,
+            ...newState,
+            currentKing: newState.currentKing !== undefined ? newState.currentKing : this.state.currentKing,
+            queue: Array.isArray(newState.queue) ? newState.queue : (this.state.queue || []),
+            fallenKings: Array.isArray(newState.fallenKings) ? newState.fallenKings : (this.state.fallenKings || []),
+            activity: Array.isArray(newState.activity) ? newState.activity : (this.state.activity || []),
+            stats: {
+              ...defaultStats,
+              ...(this.state.stats || {}),
+              ...(newState.stats || {}),
+            },
+          };
           this.notify();
           this.broadcast();
         } catch (err) {
@@ -355,6 +394,13 @@ class BurnEngine {
         try {
           const tickData = JSON.parse(e.data);
           if (this.state.currentKing) {
+            const defaultStats: GlobalStats = {
+              totalBurnedAllTime: 0,
+              totalReigns: 0,
+              highestRateEver: 0,
+              longestReignSeconds: 0,
+              currentSpectators: 1,
+            };
             this.state = {
               ...this.state,
               currentKing: {
@@ -364,8 +410,9 @@ class BurnEngine {
                 reignSeconds: tickData.reignSeconds,
               },
               stats: {
-                ...this.state.stats,
-                totalBurnedAllTime: tickData.totalBurnedAllTime,
+                ...defaultStats,
+                ...(this.state.stats || {}),
+                totalBurnedAllTime: typeof tickData.totalBurnedAllTime === 'number' ? tickData.totalBurnedAllTime : (this.state.stats?.totalBurnedAllTime || 0),
               },
             };
             this.notify();
@@ -398,7 +445,19 @@ class BurnEngine {
     const newBalance = this.state.currentKing.balance - burnPerSecond;
     const newBurned = this.state.currentKing.totalBurned + burnPerSecond;
     const newReign = this.state.currentKing.reignSeconds + 1;
-    const newTotalBurnedAllTime = this.state.stats.totalBurnedAllTime + burnPerSecond;
+    
+    const defaultStats: GlobalStats = {
+      totalBurnedAllTime: 0,
+      totalReigns: 0,
+      highestRateEver: 0,
+      longestReignSeconds: 0,
+      currentSpectators: 1,
+    };
+    const currentStats = {
+      ...defaultStats,
+      ...(this.state.stats || {}),
+    };
+    const newTotalBurnedAllTime = currentStats.totalBurnedAllTime + burnPerSecond;
 
     if (newBalance <= 0) {
       // King starved!
@@ -416,7 +475,7 @@ class BurnEngine {
         lastTickAt: Date.now(),
       },
       stats: {
-        ...this.state.stats,
+        ...currentStats,
         totalBurnedAllTime: newTotalBurnedAllTime,
       },
       serverTime: Date.now(),
