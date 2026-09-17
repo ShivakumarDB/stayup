@@ -8,7 +8,7 @@ import { ActivityEvent, FallenKing, GlobalStats, PinnedLink, QueuedLink, ServerS
 
 const app = express();
 const PORT = 3000;
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.VERCEL ? path.join('/tmp', 'data') : path.join(process.cwd(), 'data');
 const STATE_FILE = path.join(DATA_DIR, 'stayup-state.json');
 
 // Ensure data directory exists for state persistence
@@ -386,14 +386,22 @@ setInterval(() => {
   }
 }, 1000);
 
-// API Endpoints
-app.get('/api/health', (req: Request, res: Response) => {
+// API Endpoints - Health Diagnostic
+const handleHealth = (req: Request, res: Response) => {
   const rawKey = process.env.STRIPE_SECRET_KEY || '';
   const rawWebhook = process.env.STRIPE_WEBHOOK_SECRET || '';
+
+  // Vercel / Node runtime console logs (visible in Vercel Function Logs)
+  console.log(`[VERCEL/NODE RUNTIME LOG] 🚀 GET ${req.originalUrl || req.url} called at ${new Date().toISOString()}`);
+  console.log(`[VERCEL/NODE RUNTIME LOG] STRIPE_SECRET_KEY present: ${Boolean(rawKey)}, length: ${rawKey.length}, prefix: "${rawKey ? rawKey.slice(0, 7) : 'NONE'}"`);
+  console.log(`[VERCEL/NODE RUNTIME LOG] STRIPE_WEBHOOK_SECRET present: ${Boolean(rawWebhook)}, length: ${rawWebhook.length}, prefix: "${rawWebhook ? rawWebhook.slice(0, 6) : 'NONE'}"`);
+  console.log(`[VERCEL/NODE RUNTIME LOG] Environment: NODE_ENV=${process.env.NODE_ENV}, VERCEL=${process.env.VERCEL || 'not set'}, VERCEL_ENV=${process.env.VERCEL_ENV || 'not set'}`);
+  console.log(`[VERCEL/NODE RUNTIME LOG] Configured process.env keys: ${Object.keys(process.env).filter((k) => !k.startsWith('npm_')).join(', ')}`);
 
   res.json({
     status: 'ok',
     serverTime: Date.now(),
+    requestUrl: req.originalUrl || req.url,
     stripe: {
       isKeyPresent: Boolean(rawKey),
       keyPrefix: rawKey ? rawKey.slice(0, 7) : null,
@@ -402,9 +410,17 @@ app.get('/api/health', (req: Request, res: Response) => {
       webhookSecretPrefix: rawWebhook ? rawWebhook.slice(0, 6) : null,
       isTestMode: rawKey.startsWith('sk_test_'),
     },
+    vercel: {
+      isVercel: Boolean(process.env.VERCEL),
+      vercelEnv: process.env.VERCEL_ENV || null,
+      vercelRegion: process.env.VERCEL_REGION || null,
+    },
     nodeEnv: process.env.NODE_ENV || 'development',
   });
-});
+};
+
+app.get('/api/health', handleHealth);
+app.get('/health', handleHealth);
 
 app.get('/api/state', (req: Request, res: Response) => {
   res.json(getState());
@@ -1303,4 +1319,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// In local / Cloud Run container, boot standalone server.
+// On Vercel, serverless function invokes the exported Express app directly.
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
