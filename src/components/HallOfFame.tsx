@@ -98,15 +98,22 @@ export const HallOfFame: React.FC<HallOfFameProps> = ({ fallenKings }) => {
               </div>
 
               {/* Title & Link */}
-              <a
-                href={king.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-bold text-sm text-zinc-200 group-hover:text-amber-400 transition-colors flex items-center gap-1 line-clamp-1"
-              >
-                <span>{king.title}</span>
-                <ArrowUpRight className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
-              </a>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <a
+                  href={king.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-bold text-sm text-zinc-200 group-hover:text-amber-400 transition-colors flex items-center gap-1 line-clamp-1"
+                >
+                  <span>{king.title}</span>
+                  <ArrowUpRight className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                </a>
+                {king.isSeed && (
+                  <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-zinc-800 text-zinc-500 border border-zinc-700/60">
+                    SAMPLE
+                  </span>
+                )}
+              </div>
               <span className="text-xs text-zinc-500 font-mono block mt-0.5">
                 by {king.author}
               </span>

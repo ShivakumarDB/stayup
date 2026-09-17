@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { X, Shield, TrendingUp, AlertTriangle } from 'lucide-react';
+import { X, Shield, TrendingUp, AlertTriangle, KeyRound, CheckCircle2 } from 'lucide-react';
 import { formatCurrency } from '../utils/formatters';
 import { burnEngine } from '../services/burnEngine';
+import { getOwnerKey, isOwnerOf, saveOwnerKey } from '../utils/ownerKeys';
 
 interface BoostRateModalProps {
   isOpen: boolean;
@@ -23,6 +24,8 @@ export const BoostRateModal: React.FC<BoostRateModalProps> = ({
   onBoostSuccess,
 }) => {
   const [newRate, setNewRate] = useState<number>(Math.round(currentRate * 1.3));
+  const hasLocalKey = isOwnerOf(kingId);
+  const [manualKey, setManualKey] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,13 +44,22 @@ export const BoostRateModal: React.FC<BoostRateModalProps> = ({
       return;
     }
 
+    if (!hasLocalKey && !manualKey.trim()) {
+      setError('Secret management key is required to modify this link’s burn rate.');
+      return;
+    }
+
+    if (!hasLocalKey && manualKey.trim()) {
+      saveOwnerKey(kingId, manualKey.trim());
+    }
+
     setLoading(true);
     setError(null);
 
     try {
       const res = await burnEngine.boostRate(kingId, newRate);
       if (!res.success) {
-        throw new Error('Failed to boost rate');
+        throw new Error(res.error || 'Authorization failed: Invalid management key for this link.');
       }
 
       onBoostSuccess();
@@ -86,6 +98,31 @@ export const BoostRateModal: React.FC<BoostRateModalProps> = ({
         {error && (
           <div className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs">
             {error}
+          </div>
+        )}
+
+        {/* Ownership Verification Banner */}
+        {hasLocalKey ? (
+          <div className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>Verified Link Creator. Secret key stored locally in browser.</span>
+          </div>
+        ) : (
+          <div className="mb-4 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-mono text-amber-300 font-semibold">
+              <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Creator Authorization Required</span>
+            </div>
+            <p className="text-[11px] text-zinc-400 leading-relaxed">
+              Only the creator who pinned this link can raise its defense rate. Please enter the secret management key generated when the link was submitted.
+            </p>
+            <input
+              type="password"
+              placeholder="Paste secret manageKey (e.g. mk_...)"
+              value={manualKey}
+              onChange={(e) => setManualKey(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white font-mono text-xs focus:border-amber-400 focus:outline-none"
+            />
           </div>
         )}
 

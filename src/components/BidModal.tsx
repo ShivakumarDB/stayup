@@ -9,6 +9,8 @@ interface BidModalProps {
   onClose: () => void;
   minRate: number;
   currentKingRate?: number;
+  stripeEnabled?: boolean;
+  stripeTestMode?: boolean;
   onBidSuccess: () => void;
 }
 
@@ -17,6 +19,8 @@ export const BidModal: React.FC<BidModalProps> = ({
   onClose,
   minRate,
   currentKingRate,
+  stripeEnabled,
+  stripeTestMode,
   onBidSuccess,
 }) => {
   const [title, setTitle] = useState('');
@@ -60,6 +64,34 @@ export const BidModal: React.FC<BidModalProps> = ({
     setLoading(true);
 
     try {
+      // If Stripe Checkout is enabled on the server, redirect to Stripe
+      if (stripeEnabled) {
+        const res = await fetch('/api/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            url,
+            tagline,
+            author: author.startsWith('@') ? author : `@${author}`,
+            ratePerHour: effectiveRate,
+            depositAmount,
+            accentColor,
+            returnUrl: window.location.origin,
+          }),
+        });
+
+        const json = await res.json();
+        if (!res.ok || !json.checkoutUrl) {
+          throw new Error(json.error || 'Failed to create Stripe checkout session');
+        }
+
+        // Redirect user to real Stripe Checkout hosted payment page
+        window.location.href = json.checkoutUrl;
+        return;
+      }
+
+      // Sandbox Mode: Process test bid
       const res = await burnEngine.bid({
         title,
         url,
@@ -348,11 +380,22 @@ export const BidModal: React.FC<BidModalProps> = ({
             </div>
           </div>
 
-          {/* Instant Simulation Mode Note */}
-          <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800 text-[11px] text-zinc-400 flex items-center gap-2 font-mono">
-            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Instant Sandbox Deposit: Simulated fuel burns in real-time. No actual credit card required for testing.</span>
-          </div>
+          {/* Payment & Simulation Mode Note */}
+          {stripeEnabled ? (
+            <div className="p-3 rounded-xl bg-violet-500/10 border border-violet-500/30 text-[11px] text-violet-300 flex items-center gap-2 font-mono">
+              <ShieldCheck className="w-4 h-4 text-violet-400 shrink-0" />
+              <span>
+                {stripeTestMode
+                  ? '⚡ Stripe Test Mode: Test with fake card 4242 4242 4242 4242 (any future date & CVC). Action is processed strictly after webhook confirmation.'
+                  : '🔒 Live Stripe Checkout Active: Payment is verified via webhook before your link claims the throne.'}
+              </span>
+            </div>
+          ) : (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 flex items-center gap-2 font-mono">
+              <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>🧪 Sandbox Mode: Placed instantly with test fuel. (Set STRIPE_SECRET_KEY in .env to activate live card billing).</span>
+            </div>
+          )}
 
           {/* Submit Button */}
           <button
@@ -361,16 +404,21 @@ export const BidModal: React.FC<BidModalProps> = ({
             className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 font-extrabold text-sm tracking-wide shadow-lg shadow-amber-500/20 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {loading ? (
-              <span>Deploying Bid...</span>
+              <span>{stripeEnabled ? 'Redirecting to Stripe...' : 'Deploying Bid...'}</span>
+            ) : stripeEnabled ? (
+              <>
+                <Zap className="w-4 h-4 fill-current" />
+                <span>PAY {formatCurrency(depositAmount)} VIA STRIPE CHECKOUT</span>
+              </>
             ) : willImmediatelyDethrone ? (
               <>
                 <Zap className="w-4 h-4 fill-current" />
-                <span>DETHRONE & PIN AT #1 NOW ({formatCurrency(depositAmount)})</span>
+                <span>[DEMO] DETHRONE & PIN AT #1 NOW ({formatCurrency(depositAmount)})</span>
               </>
             ) : (
               <>
                 <ArrowRight className="w-4 h-4" />
-                <span>ENTER CHALLENGER QUEUE ({formatCurrency(depositAmount)})</span>
+                <span>[DEMO] ENTER CHALLENGER QUEUE ({formatCurrency(depositAmount)})</span>
               </>
             )}
           </button>

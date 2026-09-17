@@ -1,5 +1,5 @@
 import React from 'react';
-import { Crown, Flame, Eye, Volume2, VolumeX, Swords, PlusCircle } from 'lucide-react';
+import { Crown, Flame, Eye, Volume2, VolumeX, Swords, PlusCircle, RotateCcw, ShieldCheck } from 'lucide-react';
 import { GlobalStats } from '../types';
 import { formatCurrency } from '../utils/formatters';
 
@@ -10,7 +10,10 @@ interface HeaderProps {
   onToggleMute: () => void;
   onOpenBidModal: () => void;
   onSimulateRival: () => void;
+  onResetState: () => void;
   isSimulating: boolean;
+  stripeEnabled?: boolean;
+  stripeTestMode?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,7 +23,10 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleMute,
   onOpenBidModal,
   onSimulateRival,
+  onResetState,
   isSimulating,
+  stripeEnabled,
+  stripeTestMode,
 }) => {
   return (
     <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-40">
@@ -31,7 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
             <Crown className="w-6 h-6 fill-current stroke-[2.5]" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="font-extrabold text-xl tracking-tight text-white font-mono">
                 stayup<span className="text-amber-400">.lol</span>
               </span>
@@ -39,6 +45,19 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 LIVE TICK
               </span>
+              {stripeEnabled ? (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-violet-500/15 text-violet-300 border border-violet-500/30"
+                  title={stripeTestMode ? 'Stripe test mode active (sk_test_...) — safe testing with fake card 4242 4242 4242 4242' : 'Stripe live card billing active'}
+                >
+                  <ShieldCheck className="w-3 h-3 text-violet-400" />
+                  {stripeTestMode ? 'STRIPE TEST MODE (sk_test)' : 'STRIPE LIVE'}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                  🧪 SANDBOX DEMO
+                </span>
+              )}
             </div>
             <p className="text-xs text-zinc-400">
               Pay an hourly rate to hold #1. When your fuel hits $0 or someone outbids you, you drop instantly.
@@ -48,11 +67,14 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Center / Right Metrics & Quick Actions */}
         <div className="flex items-center flex-wrap gap-2.5 sm:gap-3 self-end md:self-auto">
-          {/* Spectator counter */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-300">
+          {/* Spectator counter (Real viewers) */}
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-300"
+            title="Real-time connected viewers watching the live burn ticker"
+          >
             <Eye className="w-3.5 h-3.5 text-zinc-400" />
             <span className="font-mono font-medium text-amber-400">{stats.currentSpectators}</span>
-            <span className="text-zinc-500 hidden sm:inline">watching</span>
+            <span className="text-zinc-500 hidden sm:inline">live</span>
           </div>
 
           {/* Total incinerated ticker */}
@@ -73,15 +95,28 @@ export const Header: React.FC<HeaderProps> = ({
             {isMuted ? <VolumeX className="w-4 h-4 text-zinc-500" /> : <Volume2 className="w-4 h-4 text-amber-400" />}
           </button>
 
+          {/* Reset Clean Slate button */}
+          <button
+            onClick={() => {
+              if (window.confirm('Reset state to a clean slate ($0 burned, empty throne)?')) {
+                onResetState();
+              }
+            }}
+            title="Reset throne and purge starter seed data to start with an empty slate"
+            className="p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-amber-400 transition-colors"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+
           {/* Test / Simulate Rival Attack button */}
           <button
             onClick={onSimulateRival}
             disabled={isSimulating}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/60 text-xs font-medium text-zinc-200 hover:text-white transition-all disabled:opacity-50"
-            title="Simulate an automated rival outbidding #1 to test live dethronement"
+            title="Simulate an automated rival bot outbidding #1 to test real-time dethronement"
           >
             <Swords className="w-3.5 h-3.5 text-rose-400" />
-            <span className="hidden sm:inline">Test Rival Snipe</span>
+            <span className="hidden sm:inline">🧪 Test Bot Snipe</span>
             <span className="sm:hidden">Snipe</span>
           </button>
 

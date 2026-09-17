@@ -121,8 +121,37 @@ export default function App() {
     setState(burnEngine.getState());
   };
 
+  const handleResetState = async () => {
+    await burnEngine.resetToCleanSlate();
+    refreshState();
+  };
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col selection:bg-amber-500 selection:text-black">
+      {/* Sandbox Demo Notice Banner */}
+      {!state.stripeEnabled && (
+        <div className="bg-gradient-to-r from-amber-500/15 via-zinc-900 to-amber-500/15 border-b border-amber-500/25 px-4 py-1.5 text-[11px] font-mono text-amber-300 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-[9px] font-extrabold uppercase tracking-wide text-amber-300 border border-amber-500/30">
+              Interactive Sandbox
+            </span>
+            <span className="text-zinc-300">
+              All burn rates & spectator counters are live and transparent. (Add <code className="text-amber-400">STRIPE_SECRET_KEY</code> to enable live card billing).
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              if (window.confirm('Reset all demo seed data and start with an empty throne?')) {
+                handleResetState();
+              }
+            }}
+            className="text-zinc-400 hover:text-amber-300 underline transition-colors shrink-0 text-[10px]"
+          >
+            Clear Demo Seed Data
+          </button>
+        </div>
+      )}
+
       {/* Live Dethrone Alert Toast */}
       {dethroneNotification && (
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-2xl bg-rose-600 text-white font-mono text-xs font-bold shadow-2xl shadow-rose-600/50 border border-rose-400 animate-in slide-in-from-top duration-300 flex items-center gap-2">
@@ -139,7 +168,10 @@ export default function App() {
         onToggleMute={handleToggleMute}
         onOpenBidModal={() => setIsBidModalOpen(true)}
         onSimulateRival={handleSimulateRival}
+        onResetState={handleResetState}
         isSimulating={isSimulatingRival}
+        stripeEnabled={state.stripeEnabled}
+        stripeTestMode={state.stripeTestMode}
       />
 
       {/* Main Content Area */}
@@ -216,6 +248,8 @@ export default function App() {
         onClose={() => setIsBidModalOpen(false)}
         minRate={state.minRate}
         currentKingRate={state.currentKing?.ratePerHour}
+        stripeEnabled={state.stripeEnabled}
+        stripeTestMode={state.stripeTestMode}
         onBidSuccess={refreshState}
       />
 
@@ -230,6 +264,8 @@ export default function App() {
           targetTitle={refuelTarget.title}
           ratePerHour={refuelTarget.rate}
           currentBalance={refuelTarget.balance}
+          stripeEnabled={state.stripeEnabled}
+          stripeTestMode={state.stripeTestMode}
           onRefuelSuccess={() => {
             sounds.playRefuel();
             refreshState();

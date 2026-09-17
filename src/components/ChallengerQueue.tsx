@@ -78,6 +78,16 @@ export const ChallengerQueue: React.FC<ChallengerQueueProps> = ({
                         <span>{item.title}</span>
                         <ArrowUpRight className="w-3.5 h-3.5 text-zinc-500 group-hover:text-amber-400" />
                       </a>
+                      {item.isSeed && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-zinc-800/80 text-zinc-500 border border-zinc-700/60">
+                          SAMPLE
+                        </span>
+                      )}
+                      {item.isOwnedByMe && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold">
+                          YOURS
+                        </span>
+                      )}
                     </div>
                     {item.tagline && (
                       <p className="text-xs text-zinc-400 truncate mt-0.5">{item.tagline}</p>

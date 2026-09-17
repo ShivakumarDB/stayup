@@ -57,8 +57,15 @@ export const LiveActivityFeed: React.FC<LiveActivityFeedProps> = ({ activity }) 
                 {getEventIcon(event.type)}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold text-xs text-zinc-200">{event.title}</span>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-bold text-xs text-zinc-200">{event.title}</span>
+                    {event.isBotSimulation && (
+                      <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                        SIMULATION BOT
+                      </span>
+                    )}
+                  </div>
                   <span className="text-[10px] font-mono text-zinc-500 shrink-0">
                     {timeAgo(event.timestamp)}
                   </span>

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { X, Droplets, Clock, Zap } from 'lucide-react';
+import { X, Droplets, Clock, Zap, ShieldCheck } from 'lucide-react';
 import { formatCurrency, formatDurationHuman } from '../utils/formatters';
 import { burnEngine } from '../services/burnEngine';
+import { getOwnerKey } from '../utils/ownerKeys';
 
 interface RefuelModalProps {
   isOpen: boolean;
@@ -11,6 +12,8 @@ interface RefuelModalProps {
   ratePerHour: number;
   currentBalance: number;
   onRefuelSuccess: () => void;
+  stripeEnabled?: boolean;
+  stripeTestMode?: boolean;
 }
 
 export const RefuelModal: React.FC<RefuelModalProps> = ({
@@ -21,6 +24,8 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
   ratePerHour,
   currentBalance,
   onRefuelSuccess,
+  stripeEnabled,
+  stripeTestMode,
 }) => {
   const [amount, setAmount] = useState<number>(25);
   const [loading, setLoading] = useState(false);
@@ -40,6 +45,30 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
     setError(null);
 
     try {
+      if (stripeEnabled) {
+        // Route through Stripe checkout session
+        const res = await fetch('/api/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'topup',
+            targetId,
+            amount,
+            manageKey: getOwnerKey(targetId) || '',
+          }),
+        });
+
+        const json = await res.json();
+        if (!res.ok || !json.checkoutUrl) {
+          throw new Error(json.error || 'Failed to create Stripe checkout session');
+        }
+
+        // Redirect to Stripe checkout
+        window.location.href = json.checkoutUrl;
+        return;
+      }
+
+      // Sandbox execution
       const res = await burnEngine.refuel(targetId, amount);
       if (!res.success) {
         throw new Error('Failed to refuel');
@@ -145,13 +174,38 @@ export const RefuelModal: React.FC<RefuelModalProps> = ({
             </div>
           </div>
 
+          {/* Stripe Mode Banner */}
+          {stripeEnabled ? (
+            <div className="p-3 rounded-xl bg-violet-500/10 border border-violet-500/30 text-[11px] text-violet-300 flex items-center gap-2 font-mono">
+              <ShieldCheck className="w-4 h-4 text-violet-400 shrink-0" />
+              <span>
+                {stripeTestMode
+                  ? '⚡ Stripe Test Mode: Test with fake card 4242 4242 4242 4242. Fuel is credited only after webhook confirms payment.'
+                  : '🔒 Live Stripe Checkout: Fuel is credited automatically once webhook confirms payment.'}
+              </span>
+            </div>
+          ) : (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 flex items-center gap-2 font-mono">
+              <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>🧪 Sandbox Mode: Injected instantly with simulated browser tokens.</span>
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={loading}
             className="w-full py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-extrabold text-sm tracking-wide shadow-lg shadow-emerald-500/20 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2"
           >
             <Zap className="w-4 h-4 fill-current" />
-            <span>{loading ? 'Injecting Fuel...' : `PUMP FUEL NOW (${formatCurrency(amount)})`}</span>
+            <span>
+              {loading
+                ? stripeEnabled
+                  ? 'Redirecting to Stripe...'
+                  : 'Injecting Fuel...'
+                : stripeEnabled
+                ? `PAY ${formatCurrency(amount)} VIA STRIPE CHECKOUT`
+                : `PUMP FUEL NOW (${formatCurrency(amount)})`}
+            </span>
           </button>
         </form>
       </div>

@@ -1,9 +1,10 @@
 import { ActivityEvent, FallenKing, GlobalStats, PinnedLink, QueuedLink, ServerState } from '../types';
+import { getOwnerKey, isOwnerOf, saveOwnerKey } from '../utils/ownerKeys';
 
 const STORAGE_KEY = 'stayup_state_v1';
 const MIN_RATE_INCREMENT = 5;
 
-// High quality initial seed data
+// High quality initial seed data with clear flags
 export const INITIAL_SEED_STATE: ServerState = {
   currentKing: {
     id: 'king-seed-1',
@@ -23,6 +24,7 @@ export const INITIAL_SEED_STATE: ServerState = {
     status: 'active',
     views: 1842,
     clicks: 319,
+    isSeed: true,
   },
   queue: [
     {
@@ -35,6 +37,7 @@ export const INITIAL_SEED_STATE: ServerState = {
       balance: 55.00,
       accentColor: 'cyan',
       submittedAt: Date.now() - 360000,
+      isSeed: true,
     },
     {
       id: 'queue-2',
@@ -46,6 +49,7 @@ export const INITIAL_SEED_STATE: ServerState = {
       balance: 40.00,
       accentColor: 'emerald',
       submittedAt: Date.now() - 720000,
+      isSeed: true,
     },
   ],
   fallenKings: [
@@ -61,6 +65,7 @@ export const INITIAL_SEED_STATE: ServerState = {
       dethronedAt: Date.now() - 4600000,
       cause: 'outbid',
       killerName: '@steve_design',
+      isSeed: true,
     },
     {
       id: 'fallen-2',
@@ -73,6 +78,7 @@ export const INITIAL_SEED_STATE: ServerState = {
       crownedAt: Date.now() - 18000000,
       dethronedAt: Date.now() - 13500000,
       cause: 'starved',
+      isSeed: true,
     },
     {
       id: 'fallen-3',
@@ -85,6 +91,7 @@ export const INITIAL_SEED_STATE: ServerState = {
       crownedAt: Date.now() - 32000000,
       dethronedAt: Date.now() - 24800000,
       cause: 'starved',
+      isSeed: true,
     },
   ],
   activity: [
@@ -121,10 +128,13 @@ export const INITIAL_SEED_STATE: ServerState = {
     totalReigns: 14,
     highestRateEver: 220,
     longestReignSeconds: 7200,
-    currentSpectators: 4,
+    currentSpectators: 1, // TRUE count, no padding
   },
   minRate: 145,
   serverTime: Date.now(),
+  isDemoMode: true,
+  stripeEnabled: false,
+  stripeTestMode: true,
 };
 
 class BurnEngine {
@@ -206,6 +216,16 @@ class BurnEngine {
   }
 
   private notify() {
+    // Dynamically decorate state with ownership flags based on local user's keys
+    if (this.state.currentKing) {
+      this.state.currentKing.isOwnedByMe = isOwnerOf(this.state.currentKing.id);
+    }
+    if (this.state.queue) {
+      for (const q of this.state.queue) {
+        q.isOwnedByMe = isOwnerOf(q.id);
+      }
+    }
+
     for (const listener of this.listeners) {
       try {
         listener(this.state);
@@ -483,6 +503,9 @@ class BurnEngine {
         });
         const json = await res.json();
         if (res.ok) {
+          if (json.id && json.manageKey) {
+            saveOwnerKey(json.id, json.manageKey);
+          }
           return { success: true, message: json.message };
         }
       } catch {
@@ -497,6 +520,8 @@ class BurnEngine {
     const authorHandle = data.author.startsWith('@') ? data.author : `@${data.author}`;
 
     const newId = `link-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const secretKey = `mk_${Math.random().toString(36).substring(2, 10)}${Date.now()}`;
+    saveOwnerKey(newId, secretKey);
 
     if (!this.state.currentKing || rate >= this.state.minRate) {
       // Dethrone current king!
@@ -616,28 +641,36 @@ class BurnEngine {
   /**
    * Action: Refuel fuel tank
    */
-  public async refuel(targetId: string, amount: number): Promise<{ success: boolean }> {
+  public async refuel(targetId: string, amount: number): Promise<{ success: boolean; isOwner?: boolean }> {
+    const ownerKey = getOwnerKey(targetId) || '';
     if (this.isUsingServer) {
       try {
         const res = await fetch('/api/topup', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: targetId, amount }),
+          headers: {
+            'Content-Type': 'application/json',
+            'x-manage-key': ownerKey,
+          },
+          body: JSON.stringify({ id: targetId, amount, manageKey: ownerKey }),
         });
-        if (res.ok) return { success: true };
+        if (res.ok) {
+          const json = await res.json();
+          return { success: true, isOwner: json.isOwner };
+        }
       } catch {
         // Fallback to local
       }
     }
 
     // Local refuel
+    const isOwner = isOwnerOf(targetId);
     if (this.state.currentKing && this.state.currentKing.id === targetId) {
       const newBal = this.state.currentKing.balance + amount;
       const refuelEvent: ActivityEvent = {
         id: `act-refuel-${Date.now()}`,
         type: 'refuel',
-        title: '⛽ Emergency Fuel Injected',
-        description: `${this.state.currentKing.author} added $${amount.toFixed(2)} to their tank (Total balance: $${newBal.toFixed(2)})`,
+        title: isOwner ? '⛽ Owner Refueled Tank' : '🎁 Supporter Fuel Boost',
+        description: `${isOwner ? this.state.currentKing.author : 'A supporter'} injected +$${amount.toFixed(2)} fuel into "${this.state.currentKing.title}"`,
         timestamp: Date.now(),
         amount,
         author: this.state.currentKing.author,
@@ -668,26 +701,35 @@ class BurnEngine {
 
     this.notify();
     this.broadcast();
-    return { success: true };
+    return { success: true, isOwner };
   }
 
   /**
    * Action: Boost Rate (Rate Defense)
+   * Strictly enforces owner key authorization
    */
-  public async boostRate(kingId: string, newRate: number): Promise<{ success: boolean }> {
+  public async boostRate(kingId: string, newRate: number): Promise<{ success: boolean; error?: string }> {
+    const ownerKey = getOwnerKey(kingId) || '';
+
     if (this.isUsingServer) {
       try {
         const res = await fetch('/api/boost-rate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: kingId, newRate }),
+          headers: {
+            'Content-Type': 'application/json',
+            'x-manage-key': ownerKey,
+          },
+          body: JSON.stringify({ id: kingId, newRate, manageKey: ownerKey }),
         });
+        const json = await res.json();
         if (res.ok) return { success: true };
+        return { success: false, error: json.error || 'Failed to boost rate' };
       } catch {
         // Fallback to local
       }
     }
 
+    // Local check
     if (this.state.currentKing && this.state.currentKing.id === kingId) {
       const oldRate = this.state.currentKing.ratePerHour;
       const event: ActivityEvent = {
@@ -718,6 +760,50 @@ class BurnEngine {
       this.broadcast();
     }
 
+    return { success: true };
+  }
+
+  /**
+   * Action: Reset state to clean blank slate (clears demo seeds and sets 0 total burned)
+   */
+  public async resetToCleanSlate(): Promise<{ success: boolean }> {
+    if (this.isUsingServer) {
+      try {
+        const res = await fetch('/api/reset-state', { method: 'POST' });
+        if (res.ok) return { success: true };
+      } catch {}
+    }
+
+    this.state = {
+      currentKing: null,
+      queue: [],
+      fallenKings: [],
+      activity: [
+        {
+          id: `act-clean-${Date.now()}`,
+          type: 'crown',
+          title: '✨ Clean Slate Initialized',
+          description: 'Throne is now open. Place the very first bid to claim #1!',
+          timestamp: Date.now(),
+          author: '@stayup_protocol',
+        },
+      ],
+      stats: {
+        totalBurnedAllTime: 0,
+        totalReigns: 0,
+        highestRateEver: 0,
+        longestReignSeconds: 0,
+        currentSpectators: 1,
+      },
+      minRate: 10,
+      serverTime: Date.now(),
+      isDemoMode: true,
+      stripeEnabled: false,
+      stripeTestMode: true,
+    };
+
+    this.notify();
+    this.broadcast();
     return { success: true };
   }
 

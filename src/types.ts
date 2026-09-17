@@ -16,6 +16,8 @@ export interface PinnedLink {
   status: 'active' | 'dethroned' | 'starved';
   views: number;
   clicks: number;
+  isSeed?: boolean; // flags sample demo starter links
+  isOwnedByMe?: boolean; // computed client-side
 }
 
 export interface QueuedLink {
@@ -28,6 +30,8 @@ export interface QueuedLink {
   balance: number;
   accentColor: string;
   submittedAt: number;
+  isSeed?: boolean;
+  isOwnedByMe?: boolean;
 }
 
 export interface FallenKing {
@@ -42,6 +46,7 @@ export interface FallenKing {
   dethronedAt: number;
   cause: 'outbid' | 'starved';
   killerName?: string;
+  isSeed?: boolean;
 }
 
 export interface ActivityEvent {
@@ -53,6 +58,7 @@ export interface ActivityEvent {
   amount?: number;
   rate?: number;
   author?: string;
+  isBotSimulation?: boolean; // Explicitly labels simulator bot events
 }
 
 export interface GlobalStats {
@@ -71,4 +77,7 @@ export interface ServerState {
   stats: GlobalStats;
   minRate: number; // minimum rate per hour required to challenge #1
   serverTime: number;
+  isDemoMode: boolean; // Indicates if the app is currently in simulated sandbox mode
+  stripeEnabled: boolean; // True if STRIPE_SECRET_KEY is configured on the backend
+  stripeTestMode: boolean; // True if Stripe is using test mode keys (sk_test_...)
 }

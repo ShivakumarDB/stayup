@@ -63,7 +63,7 @@ export const KingThrone: React.FC<KingThroneProps> = ({
 
       {/* Top Banner: Rank #1 & Real-Time Status */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-extrabold text-xs tracking-wider uppercase font-mono">
             <Crown className="w-4 h-4 fill-amber-400 stroke-amber-950" />
             PINNED AT #1
@@ -71,6 +71,16 @@ export const KingThrone: React.FC<KingThroneProps> = ({
           <span className="text-xs text-zinc-400 font-mono">
             Held by <strong className="text-zinc-200">{king.author}</strong>
           </span>
+          {king.isSeed && (
+            <span className="px-2 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[10px] font-mono text-zinc-400 uppercase tracking-wider">
+              Demo Seed
+            </span>
+          )}
+          {king.isOwnedByMe && (
+            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-[11px] font-mono text-emerald-400 font-bold flex items-center gap-1">
+              <span>👑</span> You Own This Link
+            </span>
+          )}
         </div>
 
         {/* Live Tension Status Badge */}
@@ -218,17 +228,25 @@ export const KingThrone: React.FC<KingThroneProps> = ({
             }`}
           >
             <Droplets className="w-4 h-4 fill-current" />
-            <span>+ TOP UP FUEL (STAY ALIVE)</span>
+            <span>{king.isOwnedByMe ? '+ TOP UP MY FUEL' : '+ EXTEND AIRTIME (REFUEL)'}</span>
           </button>
 
           {/* Raise Defense / Boost Rate Button */}
           <button
             onClick={onOpenBoostRate}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white font-medium text-xs transition-colors border border-zinc-700/60"
-            title="Raise the burn rate to make it harder for snipers to outbid you"
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-medium text-xs transition-colors border ${
+              king.isOwnedByMe
+                ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold'
+                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-zinc-700/60'
+            }`}
+            title={
+              king.isOwnedByMe
+                ? 'Raise the burn rate to deter snipers from outbidding you'
+                : 'Raise burn rate (Requires link owner secret key)'
+            }
           >
-            <Shield className="w-3.5 h-3.5 text-amber-400" />
-            <span>Raise Rate Defense</span>
+            <Shield className={`w-3.5 h-3.5 ${king.isOwnedByMe ? 'text-amber-400 fill-amber-400/20' : 'text-zinc-400'}`} />
+            <span>{king.isOwnedByMe ? 'Raise Rate Defense' : 'Rate Defense (Owner Only)'}</span>
           </button>
         </div>
 
