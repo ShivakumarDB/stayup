@@ -1,5 +1,7 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
+import { validateBidPayload } from '../server/validation';
+import { verifyOwnerToken } from '../server/db';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Content-Type', 'application/json');
@@ -11,13 +13,6 @@ export default async function handler(req: any, res: any) {
 
   const {
     action = 'bid',
-    title,
-    url,
-    tagline,
-    author,
-    ratePerHour,
-    depositAmount,
-    accentColor,
     targetId,
     amount,
     newRate,
@@ -39,33 +34,29 @@ export default async function handler(req: any, res: any) {
   });
 
   try {
-    // Action 1: Bid
-    if (action === 'bid' || (!action && title && url)) {
-      if (!title || !url || !author) {
-        return res.status(400).json({ error: 'Title, URL, and author are required.' });
+    // Action 1: Bid (Crown or Queue)
+    if (action === 'bid' || (!action && req.body?.title && req.body?.url)) {
+      const validation = validateBidPayload(req.body);
+      if (!validation.valid || !validation.data) {
+        return res.status(400).json({ error: validation.error || 'Invalid bid payload' });
       }
 
-      const rate = Number(ratePerHour);
-      const deposit = Number(depositAmount);
+      const { title, url, tagline, author, ratePerHour, depositAmount, accentColor } = validation.data;
+      const manageKey = `tok_${crypto.randomBytes(24).toString('hex')}`;
 
-      if (isNaN(rate) || rate < 10 || isNaN(deposit) || deposit < 5) {
-        return res.status(400).json({ error: 'Invalid rate (min $10/hr) or fuel deposit (min $5.00).' });
-      }
-
-      const manageKey = `mk_${crypto.randomBytes(16).toString('hex')}`;
       const order = await razorpay.orders.create({
-        amount: Math.round(deposit * 100),
+        amount: Math.round(depositAmount * 100),
         currency,
         receipt: `rcpt_bid_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         notes: {
           action: 'bid',
-          title: String(title).slice(0, 100),
-          url: String(url).slice(0, 200),
-          tagline: String(tagline || '').slice(0, 150),
-          author: String(author).slice(0, 50),
-          ratePerHour: rate.toString(),
-          depositAmount: deposit.toString(),
-          accentColor: accentColor || 'amber',
+          title: title.slice(0, 100),
+          url: url.slice(0, 200),
+          tagline: (tagline || '').slice(0, 150),
+          author: author.slice(0, 50),
+          ratePerHour: ratePerHour.toString(),
+          depositAmount: depositAmount.toString(),
+          accentColor,
           manageKey,
         },
       });
@@ -82,14 +73,26 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    // Action 2: Topup (Refuel)
+    // Action 2: Topup (Refuel) - Requires verified ownership token
     if (action === 'topup') {
       const target = targetId || req.body?.id;
-      const numAmount = Number(amount || depositAmount);
-      const manageKey = (req.headers?.['x-manage-key'] as string) || req.body?.manageKey;
+      const numAmount = Number(amount || req.body?.depositAmount);
+      const manageKey =
+        (req.headers?.['x-owner-token'] as string) ||
+        (req.headers?.['x-manage-key'] as string) ||
+        req.body?.manageKey ||
+        req.body?.ownerToken;
 
       if (!target || isNaN(numAmount) || numAmount < 1) {
         return res.status(400).json({ error: 'Valid target ID and amount (minimum $1.00) required.' });
+      }
+
+      // Authoritative ownership check
+      const isAuthorized = await verifyOwnerToken(target, manageKey);
+      if (!isAuthorized) {
+        return res.status(403).json({
+          error: 'Forbidden: Valid owner token required. Only the verified creator can refuel this link.',
+        });
       }
 
       const order = await razorpay.orders.create({
@@ -115,15 +118,27 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    // Action 3: Boost rate
+    // Action 3: Boost rate (Defense) - Requires verified ownership token
     if (action === 'boost_rate') {
       const target = targetId || req.body?.id;
       const rate = Number(newRate);
-      const deposit = Number(depositAmount || 0);
-      const manageKey = (req.headers?.['x-manage-key'] as string) || req.body?.manageKey;
+      const deposit = Number(req.body?.depositAmount || 0);
+      const manageKey =
+        (req.headers?.['x-owner-token'] as string) ||
+        (req.headers?.['x-manage-key'] as string) ||
+        req.body?.manageKey ||
+        req.body?.ownerToken;
 
-      if (!target || isNaN(rate)) {
-        return res.status(400).json({ error: 'Valid target ID and newRate required.' });
+      if (!target || isNaN(rate) || rate < 10) {
+        return res.status(400).json({ error: 'Valid target ID and new rate (minimum $10/hr) required.' });
+      }
+
+      // Authoritative ownership check
+      const isAuthorized = await verifyOwnerToken(target, manageKey);
+      if (!isAuthorized) {
+        return res.status(403).json({
+          error: 'Forbidden: Valid owner token required. Only the verified creator can boost rate defense.',
+        });
       }
 
       const order = await razorpay.orders.create({

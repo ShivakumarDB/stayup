@@ -5,6 +5,16 @@ import crypto from 'crypto';
 import Razorpay from 'razorpay';
 import { createServer as createViteServer } from 'vite';
 import { ActivityEvent, FallenKing, GlobalStats, PinnedLink, QueuedLink, ServerState } from './src/types.js';
+import {
+  loadState,
+  saveState,
+  saveOwnerToken,
+  verifyOwnerToken,
+  getDatabaseInfo,
+  InternalPinnedLink,
+  InternalQueuedLink,
+} from './server/db.js';
+import { validateBidPayload } from './server/validation.js';
 
 const app = express();
 const PORT = 3000;
@@ -35,14 +45,6 @@ function getRazorpay(): Razorpay | null {
 app.use('/api/razorpay-webhook', express.raw({ type: 'application/json' }));
 app.use('/api/stripe-webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
-
-interface InternalPinnedLink extends PinnedLink {
-  manageKey?: string;
-}
-
-interface InternalQueuedLink extends QueuedLink {
-  manageKey?: string;
-}
 
 // Initial seed data with clear flags
 const DEFAULT_SEED_STATE = {
@@ -179,22 +181,31 @@ let stats: GlobalStats = {
   currentSpectators: 1,
 };
 
-// Load state from file if exists, else load seed
-function loadPersistentState() {
+// Load state from persistent database (Vercel KV / Upstash Redis) or local file fallback
+async function loadPersistentState() {
   try {
-    if (fs.existsSync(STATE_FILE)) {
-      const content = fs.readFileSync(STATE_FILE, 'utf-8');
-      const data = JSON.parse(content);
+    const data = await loadState();
+    if (data && typeof data === 'object') {
       currentKing = data.currentKing || null;
       queue = data.queue || [];
       fallenKings = data.fallenKings || [];
       activity = data.activity || [];
       stats = data.stats || DEFAULT_SEED_STATE.stats;
-      console.log('Successfully loaded persistent state from', STATE_FILE);
+      console.log('[Server] Loaded persistent state from database/storage');
+
+      // Hydrate seed/existing tokens into memory
+      if (currentKing?.id && currentKing.manageKey) {
+        await saveOwnerToken(currentKing.id, currentKing.manageKey);
+      }
+      for (const q of queue) {
+        if (q?.id && q.manageKey) {
+          await saveOwnerToken(q.id, q.manageKey);
+        }
+      }
       return;
     }
   } catch (err) {
-    console.error('Failed to load state from disk, using default seed:', err);
+    console.error('[Server] Failed to load state from database, using seed fallback:', err);
   }
 
   // Fallback to default seed
@@ -203,26 +214,35 @@ function loadPersistentState() {
   fallenKings = [...DEFAULT_SEED_STATE.fallenKings];
   activity = [...DEFAULT_SEED_STATE.activity];
   stats = { ...DEFAULT_SEED_STATE.stats };
+
+  // Seed sample owner tokens
+  if (currentKing?.id && currentKing.manageKey) {
+    await saveOwnerToken(currentKing.id, currentKing.manageKey);
+  }
+  for (const q of queue) {
+    if (q?.id && q.manageKey) {
+      await saveOwnerToken(q.id, q.manageKey);
+    }
+  }
+
   saveStateDebounced();
 }
 
 let saveTimer: NodeJS.Timeout | null = null;
 function saveStateDebounced() {
   if (saveTimer) return;
-  saveTimer = setTimeout(() => {
+  saveTimer = setTimeout(async () => {
     saveTimer = null;
     try {
-      const data = {
+      await saveState({
         currentKing,
         queue,
         fallenKings,
         activity: activity.slice(0, 50),
         stats,
-        savedAt: Date.now(),
-      };
-      fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+      });
     } catch (err) {
-      console.error('Failed to persist state to disk:', err);
+      console.error('[Server DB Error] Failed to persist state:', err);
     }
   }, 1000);
 }
@@ -284,7 +304,7 @@ function getState(): ServerState {
     isDemoMode: !process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET,
     razorpayEnabled: Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
     razorpayTestMode: (process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_test_'),
-    razorpayKeyId: process.env.RAZORPAY_KEY_ID || null,
+    razorpayKeyId: null,
     stripeEnabled: Boolean(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
     stripeTestMode: (process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_test_'),
   };
@@ -392,34 +412,29 @@ setInterval(() => {
   }
 }, 1000);
 
-// API Endpoints - Health Diagnostic
+// API Endpoints - Health Diagnostic (Hardened: No credentials exposed)
 const handleHealth = (req: Request, res: Response) => {
   const rawKeyId = process.env.RAZORPAY_KEY_ID || '';
   const rawKeySecret = process.env.RAZORPAY_KEY_SECRET || '';
   const rawWebhook = process.env.RAZORPAY_WEBHOOK_SECRET || '';
-
-  // Vercel / Node runtime console logs (visible in Vercel Function Logs)
-  console.log(`[VERCEL/NODE RUNTIME LOG] 🚀 GET ${req.originalUrl || req.url} called at ${new Date().toISOString()}`);
-  console.log(`[VERCEL/NODE RUNTIME LOG] RAZORPAY_KEY_ID present: ${Boolean(rawKeyId)}, length: ${rawKeyId.length}, prefix: "${rawKeyId ? rawKeyId.slice(0, 8) : 'NONE'}"`);
-  console.log(`[VERCEL/NODE RUNTIME LOG] RAZORPAY_KEY_SECRET present: ${Boolean(rawKeySecret)}, length: ${rawKeySecret.length}`);
-  console.log(`[VERCEL/NODE RUNTIME LOG] Environment: NODE_ENV=${process.env.NODE_ENV}, VERCEL=${process.env.VERCEL || 'not set'}, VERCEL_ENV=${process.env.VERCEL_ENV || 'not set'}`);
-  console.log(`[VERCEL/NODE RUNTIME LOG] Configured process.env keys: ${Object.keys(process.env).filter((k) => !k.startsWith('npm_')).join(', ')}`);
+  const dbInfo = getDatabaseInfo();
 
   res.json({
     status: 'ok',
     serverTime: Date.now(),
     requestUrl: req.originalUrl || req.url,
     razorpay: {
-      isKeyPresent: Boolean(rawKeyId && rawKeySecret),
-      keyPrefix: rawKeyId ? rawKeyId.slice(0, 8) : null,
-      keyIdLength: rawKeyId.length,
+      isKeyPresent: Boolean(rawKeyId),
       isSecretPresent: Boolean(rawKeySecret),
       isWebhookSecretPresent: Boolean(rawWebhook),
       isTestMode: rawKeyId.startsWith('rzp_test_'),
-      keyId: rawKeyId || null,
     },
     razorpayEnabled: Boolean(rawKeyId && rawKeySecret),
-    razorpayKeyId: rawKeyId || null,
+    database: {
+      type: dbInfo.type,
+      isConfigured: dbInfo.isConfigured,
+      message: dbInfo.message,
+    },
     vercel: {
       isVercel: Boolean(process.env.VERCEL),
       vercelEnv: process.env.VERCEL_ENV || null,
@@ -493,7 +508,8 @@ function executeBid({
   const rate = Number(ratePerHour);
   const deposit = Number(depositAmount);
   const newId = `link-${now}-${Math.random().toString(36).slice(2, 6)}`;
-  const manageKey = providedManageKey || `mk_${crypto.randomBytes(16).toString('hex')}`;
+  const manageKey = providedManageKey || `tok_${crypto.randomBytes(24).toString('hex')}`;
+  saveOwnerToken(newId, manageKey);
   const cleanUrl = url.trim().startsWith('http') ? url.trim() : `https://${url.trim()}`;
   const authorHandle = author.startsWith('@') ? author : `@${author}`;
   const minRequired = calculateMinRate();
@@ -739,27 +755,15 @@ function executeBoostRate({
   return { success: true, king: currentKing };
 }
 
-// Post a Bid to Claim #1 or Queue
+// Post a Bid to Claim #1 or Queue (Direct/Sandbox or fallback)
 app.post('/api/bid', (req: Request, res: Response) => {
-  const { title, url, tagline, author, ratePerHour, depositAmount, accentColor } = req.body;
-
-  if (!title || !url || !author) {
-    res.status(400).json({ error: 'Title, URL, and Author are required.' });
+  const validation = validateBidPayload(req.body);
+  if (!validation.valid || !validation.data) {
+    res.status(400).json({ error: validation.error || 'Invalid bid payload' });
     return;
   }
 
-  const rate = Number(ratePerHour);
-  const deposit = Number(depositAmount);
-
-  if (isNaN(rate) || rate < 10) {
-    res.status(400).json({ error: 'Rate per hour must be at least $10/hr.' });
-    return;
-  }
-
-  if (isNaN(deposit) || deposit < 5) {
-    res.status(400).json({ error: 'Fuel deposit must be at least $5.00.' });
-    return;
-  }
+  const { title, url, tagline, author, ratePerHour: rate, depositAmount: deposit, accentColor } = validation.data;
 
   // If live/test Razorpay is configured, prompt order creation instead
   const razorpay = getRazorpay();
@@ -799,13 +803,9 @@ const handleCreateOrder = async (req: Request, res: Response) => {
     action = 'bid',
     title,
     url,
-    tagline,
-    author,
-    ratePerHour,
-    depositAmount,
-    accentColor,
     targetId,
     amount,
+    depositAmount,
     newRate,
   } = req.body;
 
@@ -813,18 +813,21 @@ const handleCreateOrder = async (req: Request, res: Response) => {
 
   // === ACTION 1: BID (Crown or Queue) ===
   if (action === 'bid' || (!action && title && url)) {
-    if (!title || !url || !author) {
-      res.status(400).json({ error: 'Title, URL, and Author are required.' });
+    const validation = validateBidPayload(req.body);
+    if (!validation.valid || !validation.data) {
+      res.status(400).json({ error: validation.error || 'Invalid bid payload' });
       return;
     }
 
-    const rate = Number(ratePerHour);
-    const deposit = Number(depositAmount);
-
-    if (isNaN(rate) || rate < 10 || isNaN(deposit) || deposit < 5) {
-      res.status(400).json({ error: 'Invalid rate (min $10/hr) or fuel deposit (min $5.00).' });
-      return;
-    }
+    const {
+      title: sanitizedTitle,
+      url: sanitizedUrl,
+      tagline: sanitizedTagline,
+      author: sanitizedAuthor,
+      ratePerHour: rate,
+      depositAmount: deposit,
+      accentColor,
+    } = validation.data;
 
     if (!razorpay) {
       res.status(400).json({ error: 'Razorpay keys are not configured on the server. Live payment is required to claim #1.' });
@@ -832,7 +835,7 @@ const handleCreateOrder = async (req: Request, res: Response) => {
     }
 
     try {
-      const manageKey = `mk_${crypto.randomBytes(16).toString('hex')}`;
+      const manageKey = `tok_${crypto.randomBytes(24).toString('hex')}`;
       const currency = process.env.RAZORPAY_CURRENCY || 'USD';
       const order = await razorpay.orders.create({
         amount: Math.round(deposit * 100), // in smallest currency unit (cents or paise)
@@ -840,10 +843,10 @@ const handleCreateOrder = async (req: Request, res: Response) => {
         receipt: `rcpt_bid_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
         notes: {
           action: 'bid',
-          title: String(title).slice(0, 100),
-          url: String(url).slice(0, 200),
-          tagline: String(tagline || '').slice(0, 150),
-          author: String(author).slice(0, 50),
+          title: sanitizedTitle,
+          url: sanitizedUrl,
+          tagline: sanitizedTagline || '',
+          author: sanitizedAuthor,
           ratePerHour: rate.toString(),
           depositAmount: deposit.toString(),
           accentColor: accentColor || 'amber',
@@ -873,7 +876,7 @@ const handleCreateOrder = async (req: Request, res: Response) => {
   if (action === 'topup') {
     const target = targetId || req.body.id;
     const numAmount = Number(amount || depositAmount);
-    const manageKey = (req.headers['x-manage-key'] as string) || req.body.manageKey;
+    const manageKey = (req.headers['x-owner-token'] as string) || (req.headers['x-manage-key'] as string) || req.body.manageKey || req.body.ownerToken;
 
     if (!target || isNaN(numAmount) || numAmount < 1) {
       res.status(400).json({ error: 'Valid target ID and amount (minimum $1.00) required.' });
@@ -921,15 +924,32 @@ const handleCreateOrder = async (req: Request, res: Response) => {
     const target = targetId || req.body.id;
     const rate = Number(newRate);
     const deposit = Number(depositAmount || 0);
-    const manageKey = (req.headers['x-manage-key'] as string) || req.body.manageKey;
+    const manageKey = (req.headers['x-owner-token'] as string) || (req.headers['x-manage-key'] as string) || req.body.manageKey || req.body.ownerToken;
 
     if (!currentKing || currentKing.id !== target || currentKing.status !== 'active') {
       res.status(404).json({ error: 'Only the active King at #1 can boost burn rate.' });
       return;
     }
 
-    if (currentKing.manageKey && currentKing.manageKey !== manageKey) {
+    // Secure owner key verification
+    const isVerifiedOwner = await verifyOwnerToken(target, manageKey);
+    if (!isVerifiedOwner) {
       res.status(403).json({ error: 'Forbidden: You do not possess the management key for this link.' });
+      return;
+    }
+
+    if (isNaN(rate) || rate <= currentKing.ratePerHour) {
+      res.status(400).json({ error: `New rate must be higher than current rate ($${currentKing.ratePerHour}/hr).` });
+      return;
+    }
+
+    if (!razorpay) {
+      res.status(400).json({ error: 'Razorpay keys are not configured on the server. Live payment is required to boost rate.' });
+      return;
+    }
+
+    if (deposit <= 0) {
+      res.status(400).json({ error: 'A fuel deposit is required to boost your defense burn rate.' });
       return;
     }
 
@@ -1172,7 +1192,7 @@ app.post('/api/razorpay-webhook', async (req: Request, res: Response) => {
 // Top up fuel to prevent starvation (Sandbox or direct fallback)
 app.post('/api/topup', (req: Request, res: Response) => {
   const { id, amount } = req.body;
-  const manageKey = (req.headers['x-manage-key'] as string) || req.body.manageKey;
+  const manageKey = (req.headers['x-owner-token'] as string) || (req.headers['x-manage-key'] as string) || req.body.manageKey || req.body.ownerToken;
   const razorpay = getRazorpay();
 
   if (razorpay && !req.body.bypassRazorpay && !req.body.bypassStripe) {
@@ -1192,10 +1212,17 @@ app.post('/api/topup', (req: Request, res: Response) => {
 });
 
 // Boost hourly burn rate (Defensive Shield)
-app.post('/api/boost-rate', (req: Request, res: Response) => {
+app.post('/api/boost-rate', async (req: Request, res: Response) => {
   const { id, newRate, depositAmount } = req.body;
-  const manageKey = (req.headers['x-manage-key'] as string) || req.body.manageKey;
+  const manageKey = (req.headers['x-owner-token'] as string) || (req.headers['x-manage-key'] as string) || req.body.manageKey || req.body.ownerToken;
   const razorpay = getRazorpay();
+
+  // Verify ownership before adjusting burn rate
+  const isVerifiedOwner = await verifyOwnerToken(id, manageKey);
+  if (!isVerifiedOwner) {
+    res.status(403).json({ error: 'Forbidden: You do not possess the management key for this link. Only the verified link owner can adjust the burn rate.' });
+    return;
+  }
 
   if (razorpay && req.body.paidBoost && !req.body.bypassRazorpay && !req.body.bypassStripe) {
     res.status(400).json({
