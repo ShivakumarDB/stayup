@@ -1,5 +1,5 @@
+import { kv } from '@vercel/kv';
 import type { ServerState, GlobalStats, PinnedLink, QueuedLink, FallenKing, ActivityEvent } from '../src/types';
-import { loadState } from '../server/db';
 
 const DEFAULT_SEED_KING: PinnedLink = {
   id: 'king-seed-1',
@@ -37,7 +37,17 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
 
-  let state = await loadState();
+  let state: any = null;
+  const kvUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const kvToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (kvUrl && kvToken) {
+    try {
+      state = await kv.get('stayup:state');
+    } catch (err) {
+      console.error('[Vercel KV Error] Failed to read state:', err);
+    }
+  }
 
   const currentKing = state?.currentKing ? { ...state.currentKing } : DEFAULT_SEED_KING;
   if (currentKing && 'manageKey' in currentKing) {

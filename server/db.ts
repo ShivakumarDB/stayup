@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Redis } from '@upstash/redis';
+import { kv, createClient } from '@vercel/kv';
 import type { FallenKing, ActivityEvent, GlobalStats } from '../src/types';
 
 export interface InternalPinnedLink {
@@ -64,28 +64,29 @@ try {
 // Global In-Memory Token Cache to speed up token checks and fallback
 const memoryTokens = new Map<string, string>();
 
-// Initialize Redis client if Vercel KV / Upstash environment variables exist
-let redisClient: Redis | null = null;
+// Initialize KV client if Vercel KV environment variables exist
+type VercelKvClient = ReturnType<typeof createClient>;
+let kvClient: VercelKvClient | null = null;
 
-function getRedisClient(): Redis | null {
-  if (redisClient) return redisClient;
+function getKvClient(): VercelKvClient | null {
+  if (kvClient) return kvClient;
 
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 
   if (url && token) {
     try {
-      redisClient = new Redis({
+      kvClient = createClient({
         url,
         token,
       });
-      console.log('[DB] Connected to persistent Vercel KV / Upstash Redis store at:', url);
+      console.log('[DB] Connected to persistent Vercel KV store at:', url);
     } catch (err) {
-      console.error('[DB Error] Failed to initialize Redis client:', err);
+      console.error('[DB Error] Failed to initialize Vercel KV client:', err);
     }
   }
 
-  return redisClient;
+  return kvClient;
 }
 
 export function getDatabaseInfo(): {
@@ -115,11 +116,11 @@ export function getDatabaseInfo(): {
  * Load state from persistent database (Vercel KV) or local file fallback
  */
 export async function loadState(): Promise<PersistedAppState | null> {
-  const redis = getRedisClient();
+  const kv = getKvClient();
 
-  if (redis) {
+  if (kv) {
     try {
-      const data = await redis.get<PersistedAppState>('stayup:state');
+      const data = await kv.get<PersistedAppState>('stayup:state');
       if (data && typeof data === 'object') {
         console.log('[DB] State successfully hydrated from Vercel KV');
         return data;
@@ -154,11 +155,11 @@ export async function saveState(state: PersistedAppState): Promise<boolean> {
   };
 
   let savedSuccessfully = false;
-  const redis = getRedisClient();
+  const kv = getKvClient();
 
-  if (redis) {
+  if (kv) {
     try {
-      await redis.set('stayup:state', payload);
+      await kv.set('stayup:state', payload);
       savedSuccessfully = true;
     } catch (err) {
       console.error('[DB Error] Failed to persist state to Vercel KV:', err);
@@ -184,11 +185,11 @@ export async function saveOwnerToken(linkId: string, token: string): Promise<voi
 
   memoryTokens.set(linkId, token);
 
-  const redis = getRedisClient();
-  if (redis) {
+  const kv = getKvClient();
+  if (kv) {
     try {
       // Retain token for 90 days in persistent store
-      await redis.set(`stayup:token:${linkId}`, token, { ex: 60 * 60 * 24 * 90 });
+      await kv.set(`stayup:token:${linkId}`, token, { ex: 60 * 60 * 24 * 90 });
     } catch (err) {
       console.error(`[DB Error] Failed to store owner token for ${linkId} in Vercel KV:`, err);
     }
@@ -217,10 +218,10 @@ export async function getOwnerToken(linkId: string): Promise<string | null> {
     return memoryTokens.get(linkId) || null;
   }
 
-  const redis = getRedisClient();
-  if (redis) {
+  const kv = getKvClient();
+  if (kv) {
     try {
-      const token = await redis.get<string>(`stayup:token:${linkId}`);
+      const token = await kv.get<string>(`stayup:token:${linkId}`);
       if (token) {
         memoryTokens.set(linkId, token);
         return token;
